@@ -58,6 +58,21 @@ function doPost(event) {
       return json_({ ok: true, booking, conflict: false });
     }
 
+    if (body.action === "batchCreate") {
+      const results = [];
+      const inputs = body.bookings || [];
+      for (let i = 0; i < inputs.length; i++) {
+        var booking = enrichBooking_(inputs[i]);
+        if (hasConflict_(booking)) {
+          results.push({ index: i, conflict: true });
+        } else {
+          appendBooking_(booking);
+          results.push({ index: i, conflict: false, booking: booking });
+        }
+      }
+      return json_({ ok: true, results: results });
+    }
+
     if (body.action === "update") {
       const booking = updateBooking_(body.id, body.patch);
       return json_({ ok: true, booking });
@@ -349,6 +364,9 @@ function toRow_(booking) {
     item.paymentStatus,
     item.prepayment,
     item.balance,
+    "",
+    "",
+    "",
     item.comment,
     item.deletedAt,
     JSON.stringify(payments),
@@ -369,9 +387,7 @@ function enrichBooking_(booking) {
     paymentStatus: normalizePaymentStatus_(booking.paymentStatus),
     prepayment,
     balance: Math.max(0, salePrice - prepayment),
-    paymentMethod: booking.paymentMethod || "Не выбран",
-    paymentRecipient: booking.paymentRecipient || "",
-    paidAt: text_(booking.paidAt || "").replace(/^'/, ""),
+    payments: booking.payments || [],
     comment: booking.comment || "",
     deletedAt: text_(booking.deletedAt || "").replace(/^'/, ""),
   });
