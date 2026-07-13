@@ -1988,6 +1988,21 @@ a {
   border-bottom: 1px solid var(--line);
 }
 
+.analytics-row-button {
+  width: 100%;
+  color: inherit;
+  text-align: left;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  border-left: 0;
+  background: transparent;
+}
+
+.analytics-row-button:hover {
+  background: #f8faf8;
+}
+
 .analytics-row strong,
 .analytics-row small {
   display: block;
@@ -2123,6 +2138,31 @@ a {
   gap: 16px;
   padding: 16px;
   border-bottom: 1px solid var(--line);
+}
+
+.schedule-toolbar-compact {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.queue-summary-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f8faf8;
+}
+
+.queue-summary-card strong,
+.queue-summary-card small {
+  display: block;
+}
+
+.queue-summary-card small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .schedule-search {
@@ -2384,6 +2424,19 @@ a {
   border-top: 1px solid var(--line);
 }
 
+.payment-form-grid {
+  align-items: end;
+}
+
+.payment-form-submit {
+  display: flex;
+  align-items: flex-end;
+}
+
+.payment-form-submit .secondary-button {
+  min-height: 46px;
+}
+
 .empty-inline {
   padding: 14px;
   color: var(--muted);
@@ -2396,11 +2449,15 @@ a {
 .trash-row,
 .repeat-source-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   padding: 16px 20px;
   border-bottom: 1px solid var(--line);
+}
+
+.trash-row-content {
+  min-width: 0;
 }
 
 .trash-row strong,
@@ -2425,6 +2482,24 @@ a {
   margin: 18px 0 6px;
   border-radius: 14px;
   background: var(--green-soft);
+}
+
+.settings-card {
+  padding-bottom: 20px;
+}
+
+.settings-grid {
+  align-items: end;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 18px;
+}
+
+.settings-actions .primary-button {
+  min-width: 220px;
 }
 
 .repeat-source-list {
@@ -2810,6 +2885,16 @@ a {
   .trash-actions,
   .schedule-head-actions {
     flex-direction: column;
+  }
+
+  .payment-form-submit,
+  .settings-actions {
+    width: 100%;
+  }
+
+  .payment-form-submit .secondary-button,
+  .settings-actions .primary-button {
+    width: 100%;
   }
 
   .trash-row,

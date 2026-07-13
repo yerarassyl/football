@@ -18,10 +18,12 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { enrichBooking, formatLabel } from "@/lib/booking";
 import { FIELD_OPTIONS, FieldOption, formatPrice, SECTORS } from "@/lib/constants";
 import { bookingEndTime, formatDuration } from "@/lib/time";
-import { BookingRequest, FieldFormat, PaymentRecord } from "@/lib/types";
+import { BookingRequest, FieldFormat, PaymentRecord, RequestStatus } from "@/lib/types";
 import CalendarPicker from "./CalendarPicker";
 
-type Tab = "schedule" | "repeat" | "trash" | "analytics" | "settings";
+type QueueStatus = Exclude<RequestStatus, "deleted">;
+type QueueTab = `status:${QueueStatus}`;
+type Tab = "schedule" | QueueTab | "repeat" | "trash" | "analytics" | "settings";
 
 type EditorState = {
   id?: string;
@@ -39,6 +41,45 @@ type EditorState = {
   comment: string;
   status: BookingRequest["status"];
 };
+
+type QueueConfig = {
+  tab: QueueTab;
+  status: QueueStatus;
+  label: string;
+  description: string;
+  icon: typeof CalendarDays;
+};
+
+const queueTabs: QueueConfig[] = [
+  {
+    tab: "status:new",
+    status: "new",
+    label: "Новые",
+    description: "Ожидают обработки",
+    icon: CalendarPlus,
+  },
+  {
+    tab: "status:in_progress",
+    status: "in_progress",
+    label: "В работе",
+    description: "На контроле администратора",
+    icon: RefreshCcw,
+  },
+  {
+    tab: "status:confirmed",
+    status: "confirmed",
+    label: "Подтвержденные",
+    description: "Успешно проведены",
+    icon: Save,
+  },
+  {
+    tab: "status:cancelled",
+    status: "cancelled",
+    label: "Отмененные",
+    description: "Не дошли до игры",
+    icon: Trash2,
+  },
+];
 
 const paymentMethods = [
   "Не выбран",
@@ -219,6 +260,30 @@ export default function AdminDashboard() {
     [bookings, query],
   );
 
+  const statusQueues = useMemo(
+    () =>
+      queueTabs.reduce<Record<QueueTab, BookingRequest[]>>((map, item) => {
+        map[item.tab] = bookings
+          .filter((booking) => booking.status === item.status && matchQuery(booking, query))
+          .sort(bookingSort);
+        return map;
+      }, {} as Record<QueueTab, BookingRequest[]>),
+    [bookings, query],
+  );
+
+  const currentQueue = useMemo(
+    () => queueTabs.find((item) => item.tab === tab),
+    [tab],
+  );
+
+  useEffect(() => {
+    if (!currentQueue || createMode) return;
+    const activeSelection = bookings.find((item) => item.id === selectedId);
+    if (!activeSelection || activeSelection.status !== currentQueue.status) {
+      setSelectedId(statusQueues[currentQueue.tab][0]?.id || "");
+    }
+  }, [bookings, createMode, currentQueue, selectedId, statusQueues]);
+
   async function persistPatch(id: string, patch: Partial<BookingRequest>) {
     const response = await fetch(`/api/bookings/${id}`, {
       method: "PATCH",
@@ -348,6 +413,29 @@ export default function AdminDashboard() {
     window.location.href = "/admin/login";
   }
 
+  function openStatusTab(status: QueueStatus, bookingId?: string) {
+    const nextTab = `status:${status}` as QueueTab;
+    setTab(nextTab);
+    setCreateMode(false);
+    if (bookingId) setSelectedId(bookingId);
+  }
+
+  function openBookingDetails(bookingId: string, fallbackStatus: QueueStatus = "confirmed") {
+    const booking = bookings.find((item) => item.id === bookingId);
+    if (!booking) return;
+    if (booking.status === "deleted") {
+      setTab("trash");
+      setSelectedId(booking.id);
+      setCreateMode(false);
+      return;
+    }
+    if (booking.status === "new" || booking.status === "in_progress" || booking.status === "confirmed" || booking.status === "cancelled") {
+      openStatusTab(booking.status, booking.id);
+      return;
+    }
+    openStatusTab(fallbackStatus, booking.id);
+  }
+
   return (
     <div className="admin-layout">
       <aside className="admin-sidebar">
@@ -358,6 +446,16 @@ export default function AdminDashboard() {
           <button className={tab === "schedule" ? "active" : ""} onClick={() => setTab("schedule")}>
             <CalendarDays size={18} /> График
           </button>
+          {queueTabs.map((item) => {
+            const Icon = item.icon;
+            const count = bookings.filter((booking) => booking.status === item.status).length;
+            return (
+              <button className={tab === item.tab ? "active" : ""} key={item.tab} onClick={() => setTab(item.tab)}>
+                <Icon size={18} /> {item.label}
+                <span>{count}</span>
+              </button>
+            );
+          })}
           <button className={tab === "repeat" ? "active" : ""} onClick={() => setTab("repeat")}>
             <CopyPlus size={18} /> Повтор
           </button>
@@ -487,6 +585,94 @@ export default function AdminDashboard() {
           />
         )}
 
+        {currentQueue && (
+          <>
+            <div className="admin-heading">
+              <div>
+                <div className="section-kicker">Статусы заявок</div>
+                <h1>{currentQueue.label}</h1>
+                <p>{currentQueue.description}. Нажмите на карточку слева, чтобы открыть полную заявку и историю оплат.</p>
+              </div>
+              <div className="schedule-head-actions">
+                <button className="secondary-button" onClick={() => void load()} type="button">
+                  <RefreshCcw size={16} /> Обновить
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-schedule-grid">
+              <section className="admin-card schedule-panel">
+                <div className="schedule-toolbar schedule-toolbar-compact">
+                  <div className="queue-summary-card">
+                    <strong>{currentQueue.label}</strong>
+                    <small>{currentQueue.description}</small>
+                  </div>
+                  <div className="search-box schedule-search">
+                    <Search size={16} />
+                    <input
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder="Поиск по имени, телефону, команде"
+                    />
+                  </div>
+                </div>
+                <div className="schedule-day-head">
+                  <div>
+                    <strong>{currentQueue.label}</strong>
+                    <small>{statusQueues[currentQueue.tab].length} заявок в списке</small>
+                  </div>
+                </div>
+                <div className="schedule-list">
+                  {statusQueues[currentQueue.tab].length === 0 && <div className="empty-state">В этом статусе пока нет заявок</div>}
+                  {statusQueues[currentQueue.tab].map((booking) => (
+                    <button
+                      className={`schedule-card ${paymentClass(booking)} ${selectedId === booking.id && !createMode ? "selected" : ""}`}
+                      key={booking.id}
+                      onClick={() => {
+                        setCreateMode(false);
+                        setSelectedId(booking.id);
+                      }}
+                      type="button"
+                    >
+                      <div className="schedule-card-time">
+                        <strong>{booking.date}</strong>
+                        <span>{booking.time}-{bookingEndTime(booking.time, booking.duration)}</span>
+                        <small>{formatDuration(booking.duration)}</small>
+                      </div>
+                      <div className="schedule-card-body">
+                        <div className="schedule-card-top">
+                          <strong>{booking.name}</strong>
+                          <span>{formatPrice(booking.salePrice || booking.price)}</span>
+                        </div>
+                        <div className="schedule-card-format">{formatLabel(booking.format)}</div>
+                        <div className="schedule-card-meta">
+                          <span>{booking.sector}</span>
+                          <span>{booking.team || booking.phone}</span>
+                          <span>{booking.paymentStatus === "paid" ? "Оплачено" : booking.paymentStatus === "deposit" ? "Частично" : "Без оплаты"}</span>
+                        </div>
+                        {booking.comment && <div className="schedule-card-comment">{booking.comment}</div>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <BookingEditor
+                booking={selectedBooking}
+                createMode={createMode}
+                editor={editor}
+                fieldOptions={fieldOptions}
+                onAddPayment={addPayment}
+                onChange={setEditor}
+                onDelete={() => selectedBooking && void moveToTrash(selectedBooking.id)}
+                onSave={saveBooking}
+                onCancelCreate={() => setCreateMode(false)}
+                saving={saving}
+              />
+            </div>
+          </>
+        )}
+
         {tab === "trash" && (
           <>
             <div className="admin-heading">
@@ -507,9 +693,12 @@ export default function AdminDashboard() {
                 <div className="empty-state">Корзина пуста</div>
               ) : trashBookings.map((booking) => (
                 <div className="trash-row" key={booking.id}>
-                  <div>
+                  <div className="trash-row-content">
                     <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
                     <small>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</small>
+                    <small>Телефон: {booking.phone} · Команда: {booking.team || "не указана"}</small>
+                    <small>Сумма: {formatPrice(booking.salePrice || booking.price)} · Оплачено: {formatPrice(booking.prepayment)} · Остаток: {formatPrice(booking.balance)}</small>
+                    <small>Источник: {booking.source || "Сайт"}{booking.comment ? ` · ${booking.comment}` : ""}</small>
                   </div>
                   <div className="trash-actions">
                     <button className="secondary-button" onClick={() => void restoreFromTrash(booking.id)} type="button">Восстановить</button>
@@ -521,7 +710,13 @@ export default function AdminDashboard() {
           </>
         )}
 
-        {tab === "analytics" && <AnalyticsDashboard bookings={bookings} />}
+        {tab === "analytics" && (
+          <AnalyticsDashboard
+            bookings={bookings}
+            onOpenBooking={openBookingDetails}
+            onOpenStatus={openStatusTab}
+          />
+        )}
         {tab === "settings" && <PriceSettings fieldOptions={fieldOptions} onChange={setFieldOptions} />}
       </main>
     </div>
@@ -724,7 +919,7 @@ function BookingEditor({
               });
             }}
           >
-            <div className="editor-grid">
+            <div className="editor-grid payment-form-grid">
               <label className="form-field">
                 <span>Сумма</span>
                 <input type="number" min="0" required value={paymentForm.amount} onChange={(event) => setPaymentForm({ ...paymentForm, amount: event.target.value })} />
@@ -745,8 +940,10 @@ function BookingEditor({
                   {paymentRecipients.map((recipient) => <option key={recipient}>{recipient}</option>)}
                 </select>
               </label>
+              <div className="payment-form-submit">
+                <button className="secondary-button" disabled={saving} type="submit"><CircleDollarSign size={16} /> Добавить оплату</button>
+              </div>
             </div>
-            <button className="secondary-button" disabled={saving} type="submit"><CircleDollarSign size={16} /> Добавить оплату</button>
           </form>
         </section>
       )}
@@ -919,6 +1116,7 @@ type AnalyticsRow = {
   value: string;
   meta?: string;
   tone?: "neutral" | "success" | "warning" | "danger";
+  onClick?: () => void;
 };
 
 function dateOnly(value: string) {
@@ -985,7 +1183,15 @@ function occupiedUnits(booking: BookingRequest) {
   return booking.sector.split("+").filter(Boolean).length || (booking.format === "full" ? 4 : booking.format === "half" ? 2 : 1);
 }
 
-function AnalyticsDashboard({ bookings }: { bookings: BookingRequest[] }) {
+function AnalyticsDashboard({
+  bookings,
+  onOpenBooking,
+  onOpenStatus,
+}: {
+  bookings: BookingRequest[];
+  onOpenBooking: (bookingId: string, fallbackStatus?: QueueStatus) => void;
+  onOpenStatus: (status: QueueStatus, bookingId?: string) => void;
+}) {
   const today = localDateValue();
   const [view, setView] = useState<AnalyticsView>("overview");
   const [preset, setPreset] = useState<RangePreset>("month");
@@ -1214,6 +1420,59 @@ function AnalyticsDashboard({ bookings }: { bookings: BookingRequest[] }) {
       };
     });
 
+  const overdueRowsLinked = overdueRows.map((row) => {
+    const booking = confirmed
+      .filter((item) => item.balance > 0 && item.date < today)
+      .sort((a, b) => b.balance - a.balance)
+      .find((item) => item.name === row.label && formatPrice(item.balance) === row.value);
+    return booking ? { ...row, onClick: () => onOpenBooking(booking.id, "confirmed") } : row;
+  });
+
+  const discountRowsLinked = discountRows.map((row) => {
+    const booking = confirmed
+      .filter((item) => item.salePrice < item.listPrice)
+      .sort((a, b) => (b.listPrice - b.salePrice) - (a.listPrice - a.salePrice))
+      .find((item) => item.name === row.label && formatPrice(item.listPrice - item.salePrice) === row.value);
+    return booking ? { ...row, onClick: () => onOpenBooking(booking.id, "confirmed") } : row;
+  });
+
+  const partialUpcomingRowsLinked = partialUpcomingRows.map((row) => {
+    const booking = activeBooked
+      .filter((item) => item.date >= today && diffDays(today, item.date) <= 3 && item.balance > 0)
+      .sort(bookingSort)
+      .find((item) => `${item.name} Â· ${item.date}` === row.label || `${item.name} · ${item.date}` === row.label);
+    return booking
+      ? { ...row, onClick: () => onOpenBooking(booking.id, booking.status === "in_progress" ? "in_progress" : "confirmed") }
+      : row;
+  });
+
+  const backdatedRowsLinked = backdatedRows.map((row) => {
+    const booking = byCreatedDate
+      .filter((item) => dateOnly(item.createdAt) > item.date)
+      .find((item) => item.name === row.label && item.date === row.value);
+    return booking
+      ? {
+          ...row,
+          onClick: () =>
+            onOpenBooking(
+              booking.id,
+              booking.status === "cancelled"
+                ? "cancelled"
+                : booking.status === "in_progress"
+                  ? "in_progress"
+                  : booking.status === "new"
+                    ? "new"
+                    : "confirmed",
+            ),
+        }
+      : row;
+  });
+
+  const frequentCancelRowsLinked = frequentCancelRows.map((row) => {
+    const booking = bookings.find((item) => item.phone === row.meta && item.status === "cancelled");
+    return booking ? { ...row, onClick: () => onOpenBooking(booking.id, "cancelled") } : row;
+  });
+
   const overviewCards = [
     { label: "Выручка сегодня", value: formatPrice(todayRevenue), hint: `${todayBookings} броней сегодня` },
     { label: "Выручка периода", value: formatPrice(revenue), hint: `${confirmed.length} подтвержденных` },
@@ -1306,8 +1565,8 @@ function AnalyticsDashboard({ bookings }: { bookings: BookingRequest[] }) {
           <div className="analytics-tables analytics-tables-wide">
             <AnalyticsListCard title="Поступления по способам оплаты" rows={methodRows} />
             <AnalyticsListCard title="Поступления по получателям" rows={recipientRows} />
-            <AnalyticsListCard title="Скидки ниже прайса" rows={discountRows} />
-            <AnalyticsListCard title="Долги клиентов" rows={overdueRows} />
+            <AnalyticsListCard title="Скидки ниже прайса" rows={discountRowsLinked} />
+            <AnalyticsListCard title="Долги клиентов" rows={overdueRowsLinked} />
           </div>
         </>
       )}
@@ -1364,10 +1623,10 @@ function AnalyticsDashboard({ bookings }: { bookings: BookingRequest[] }) {
             <AnalyticsListCard
               title="Статусы заявок"
               rows={[
-                { label: "Новые", value: String(byCreatedDate.filter((item) => item.status === "new").length), meta: "Ожидают обработки" },
-                { label: "В работе", value: String(byCreatedDate.filter((item) => item.status === "in_progress").length), meta: "На контроле администратора" },
-                { label: "Подтвержденные", value: String(byCreatedDate.filter((item) => item.status === "confirmed").length), meta: "Успешно проведены" },
-                { label: "Отмененные", value: String(cancelled.length), meta: "Не дошли до игры" },
+                { label: "Новые", value: String(byCreatedDate.filter((item) => item.status === "new").length), meta: "Ожидают обработки", onClick: () => onOpenStatus("new") },
+                { label: "В работе", value: String(byCreatedDate.filter((item) => item.status === "in_progress").length), meta: "На контроле администратора", onClick: () => onOpenStatus("in_progress") },
+                { label: "Подтвержденные", value: String(byCreatedDate.filter((item) => item.status === "confirmed").length), meta: "Успешно проведены", onClick: () => onOpenStatus("confirmed") },
+                { label: "Отмененные", value: String(cancelled.length), meta: "Не дошли до игры", onClick: () => onOpenStatus("cancelled") },
               ]}
             />
           </div>
@@ -1401,10 +1660,10 @@ function AnalyticsDashboard({ bookings }: { bookings: BookingRequest[] }) {
             <AnalyticsStatCard label="Задним числом" value={String(backdatedRows.length)} hint="Брони созданы после даты игры" />
           </div>
           <div className="analytics-tables analytics-tables-wide">
-            <AnalyticsListCard title="Просроченные долги" rows={overdueRows} />
-            <AnalyticsListCard title="Частично оплаченные ближайшие брони" rows={partialUpcomingRows} />
-            <AnalyticsListCard title="Частые отмены" rows={frequentCancelRows} />
-            <AnalyticsListCard title="Брони задним числом" rows={backdatedRows} />
+            <AnalyticsListCard title="Просроченные долги" rows={overdueRowsLinked} />
+            <AnalyticsListCard title="Частично оплаченные ближайшие брони" rows={partialUpcomingRowsLinked} />
+            <AnalyticsListCard title="Частые отмены" rows={frequentCancelRowsLinked} />
+            <AnalyticsListCard title="Брони задним числом" rows={backdatedRowsLinked} />
           </div>
         </>
       )}
@@ -1431,13 +1690,18 @@ function AnalyticsListCard({ title, rows }: { title: string; rows: AnalyticsRow[
       </div>
       {rows.length === 0 && <div className="empty-state">Данных пока нет</div>}
       {rows.map((row) => (
-        <div className={`analytics-row analytics-row-${row.tone || "neutral"}`} key={`${title}-${row.label}-${row.value}`}>
+        <button
+          className={`analytics-row analytics-row-${row.tone || "neutral"} ${row.onClick ? "analytics-row-button" : ""}`}
+          key={`${title}-${row.label}-${row.value}`}
+          onClick={row.onClick}
+          type="button"
+        >
           <div>
             <strong>{row.label}</strong>
             {row.meta && <small>{row.meta}</small>}
           </div>
           <span>{row.value}</span>
-        </div>
+        </button>
       ))}
     </section>
   );
@@ -1529,8 +1793,8 @@ function PriceSettings({
           <p>Почасовые цены используются в форме, графике и при автоподсчете стоимости.</p>
         </div>
       </div>
-      <form className="admin-card repeat-card" onSubmit={(event) => void save(event)}>
-        <div className="editor-grid">
+      <form className="admin-card repeat-card settings-card" onSubmit={(event) => void save(event)}>
+        <div className="editor-grid settings-grid">
           {fieldOptions.map((option) => (
             <label className="form-field" key={option.id}>
               <span>{option.shortLabel}</span>
@@ -1539,9 +1803,11 @@ function PriceSettings({
           ))}
         </div>
         {message && <div className={`admin-booking-message ${message === "Цены сохранены" ? "success" : ""}`}>{message}</div>}
-        <button className="primary-button" disabled={saving} type="submit">
-          <CircleDollarSign size={16} /> {saving ? "Сохраняем..." : "Сохранить цены"}
-        </button>
+        <div className="settings-actions">
+          <button className="primary-button" disabled={saving} type="submit">
+            <CircleDollarSign size={16} /> {saving ? "Сохраняем..." : "Сохранить цены"}
+          </button>
+        </div>
       </form>
     </>
   );
