@@ -27,26 +27,21 @@ function toIso(year: number, month: number, day: number) {
 export default function CalendarPicker({
   value,
   onChange,
-  allowPast = false,
-  minDate,
 }: {
   value: string;
   onChange: (date: string) => void;
-  allowPast?: boolean;
-  minDate?: string;
 }) {
   const selected = new Date(`${value}T12:00:00`);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const min = minDate ? new Date(`${minDate}T12:00:00`) : allowPast ? new Date(today.getFullYear() - 1, 0, 1) : today;
   const maxDate = new Date(today);
   maxDate.setFullYear(maxDate.getFullYear() + 1);
 
   const [viewYear, setViewYear] = useState(selected.getFullYear());
   const [viewMonth, setViewMonth] = useState(selected.getMonth());
   const years = Array.from(
-    { length: maxDate.getFullYear() - min.getFullYear() + 1 },
-    (_, index) => min.getFullYear() + index,
+    { length: maxDate.getFullYear() - today.getFullYear() + 1 },
+    (_, index) => today.getFullYear() + index,
   );
 
   const cells = useMemo(() => {
@@ -61,7 +56,7 @@ export default function CalendarPicker({
 
   function moveMonth(direction: number) {
     const next = new Date(viewYear, viewMonth + direction, 1);
-    const minMonth = new Date(min.getFullYear(), min.getMonth(), 1);
+    const minMonth = new Date(today.getFullYear(), today.getMonth(), 1);
     const maxMonth = new Date(maxDate.getFullYear(), maxDate.getMonth(), 1);
     if (next < minMonth || next > maxMonth) return;
     setViewYear(next.getFullYear());
@@ -94,7 +89,7 @@ export default function CalendarPicker({
           if (!day) return <span className="calendar-empty" key={`empty-${index}`} />;
           const date = new Date(viewYear, viewMonth, day);
           const iso = toIso(viewYear, viewMonth, day);
-          const disabled = date < min || date > maxDate;
+          const disabled = date < today || date > maxDate;
           return (
             <button
               className={`${value === iso ? "selected" : ""} ${disabled ? "disabled" : ""}`}

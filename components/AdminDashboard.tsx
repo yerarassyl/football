@@ -2,111 +2,184 @@
 
 import {
   BarChart3,
-  Calendar,
+  CalendarDays,
   CalendarPlus,
-  Check,
-  ChevronRight,
   CircleDollarSign,
+  CopyPlus,
   LogOut,
-  Repeat,
+  Plus,
+  RefreshCcw,
+  Save,
   Search,
   Trash2,
   Trophy,
-  UsersRound,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { DURATION_OPTIONS, FIELD_OPTIONS, FieldOption, formatPrice, SECTORS, TIME_SLOTS, PAYMENT_METHODS, PAYMENT_RECIPIENTS } from "@/lib/constants";
-import { BookingRequest, BookingInput, FieldFormat, PaymentStatus, RequestStatus } from "@/lib/types";
-import { bookingEndTime, bookingSlots, formatDuration } from "@/lib/time";
+import { enrichBooking, formatLabel } from "@/lib/booking";
+import { FIELD_OPTIONS, FieldOption, formatPrice, SECTORS } from "@/lib/constants";
+import { bookingEndTime, formatDuration } from "@/lib/time";
+import { BookingRequest, FieldFormat, PaymentRecord } from "@/lib/types";
 import CalendarPicker from "./CalendarPicker";
-import ScheduleView from "./ScheduleView";
-import BookingEditModal from "./BookingEditModal";
-import RepeatSchedule from "./RepeatSchedule";
 
-type Tab = "schedule" | "requests" | "confirmed" | "repeat" | "trash" | "analytics" | "settings";
+type Tab = "schedule" | "repeat" | "trash" | "analytics" | "settings";
 
-const statusLabel: Record<RequestStatus, string> = {
-  new: "Новая",
-  in_progress: "В работе",
-  confirmed: "Подтверждена",
-  cancelled: "Отменена",
-  deleted: "В корзине",
+type EditorState = {
+  id?: string;
+  date: string;
+  time: string;
+  duration: number;
+  format: FieldFormat;
+  sector: string;
+  name: string;
+  phone: string;
+  team: string;
+  source: string;
+  sourceDetail: string;
+  salePrice: string;
+  comment: string;
+  status: BookingRequest["status"];
 };
 
-const paymentLabel: Record<PaymentStatus, string> = {
-  unpaid: "Не оплачено",
-  deposit: "Частично оплачено",
-  paid: "Полностью оплачено",
-};
+const paymentMethods = [
+  "Не выбран",
+  "Наличные",
+  "Kaspi QR",
+  "Kaspi Терминал",
+  "Счет на оплату",
+  "Банковский перевод",
+  "Контрактный клиент",
+  "Другое",
+];
 
-function dateKey(date: Date) {
-  return date.toISOString().slice(0, 10);
+const paymentRecipients = [
+  "Не выбран",
+  "ТОО AIR ARENA",
+  "ИП AIR ARENA",
+  "ТОО WMA GROUP",
+  "Другое",
+];
+
+function addDays(date: string, days: number) {
+  const next = new Date(`${date}T00:00:00`);
+  next.setDate(next.getDate() + days);
+  return next.toISOString().slice(0, 10);
 }
 
-function createdDateLabel(value: string) {
-  const created = new Date(value || Date.now());
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(today.getDate() - 1);
-  if (dateKey(created) === dateKey(today)) return "Сегодня";
-  if (dateKey(created) === dateKey(yesterday)) return "Вчера";
-  return created.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+function localDateValue() {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60_000;
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
 }
 
-function groupRequestsByCreatedDate(items: BookingRequest[]) {
-  const sorted = [...items].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  return sorted.reduce<Array<{ label: string; items: BookingRequest[] }>>((groups, item) => {
-    const label = createdDateLabel(item.createdAt);
-    const current = groups.find((group) => group.label === label);
-    if (current) current.items.push(item);
-    else groups.push({ label, items: [item] });
-    return groups;
-  }, []);
+function diffDays(from: string, to: string) {
+  const start = new Date(`${from}T00:00:00`).getTime();
+  const end = new Date(`${to}T00:00:00`).getTime();
+  return Math.round((end - start) / 86_400_000);
 }
 
-function actionNotice(patch: Partial<BookingRequest>) {
-  if (patch.status === "confirmed") return "Бронь подтверждена";
-  if (patch.status === "in_progress") return "Заявка переведена в работу";
-  if (patch.status === "cancelled") return "Бронь отменена";
-  if (patch.status === "deleted") return "Заявка удалена в корзину";
-  if (patch.status === "new" && patch.deletedAt === "") return "Заявка восстановлена";
-  return "Изменения сохранены";
+function bookingSort(a: BookingRequest, b: BookingRequest) {
+  return `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`);
+}
+
+function matchQuery(item: BookingRequest, query: string) {
+  const value = query.trim().toLowerCase();
+  if (!value) return true;
+  return [item.name, item.phone, item.team, item.comment, item.source, item.sourceDetail]
+    .join(" ")
+    .toLowerCase()
+    .includes(value);
+}
+
+function calculateListPrice(fieldOptions: FieldOption[], format: FieldFormat, duration: number) {
+  const hourly = fieldOptions.find((item) => item.id === format)?.price || 0;
+  return Math.round(hourly * (duration / 60));
+}
+
+function defaultEditor(date: string, fieldOptions: FieldOption[]): EditorState {
+  const format: FieldFormat = "quarter";
+  const duration = 60;
+  return {
+    date,
+    time: "09:00",
+    duration,
+    format,
+    sector: SECTORS[format][0].id,
+    name: "",
+    phone: "",
+    team: "",
+    source: "Администратор",
+    sourceDetail: "",
+    salePrice: String(calculateListPrice(fieldOptions, format, duration)),
+    comment: "",
+    status: "confirmed",
+  };
+}
+
+function editorFromBooking(booking: BookingRequest): EditorState {
+  return {
+    id: booking.id,
+    date: booking.date,
+    time: booking.time,
+    duration: booking.duration,
+    format: booking.format,
+    sector: booking.sector,
+    name: booking.name,
+    phone: booking.phone,
+    team: booking.team,
+    source: booking.source,
+    sourceDetail: booking.sourceDetail,
+    salePrice: String(booking.salePrice || booking.price || 0),
+    comment: booking.comment || "",
+    status: booking.status,
+  };
+}
+
+function paymentClass(booking: BookingRequest) {
+  return `payment-card ${booking.paymentStatus}`;
+}
+
+function noticeText(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  return "Не удалось выполнить действие";
 }
 
 export default function AdminDashboard() {
+  const today = localDateValue();
   const [tab, setTab] = useState<Tab>("schedule");
-  const [requests, setRequests] = useState<BookingRequest[]>([]);
+  const [bookings, setBookings] = useState<BookingRequest[]>([]);
+  const [selectedDate, setSelectedDate] = useState(today);
   const [selectedId, setSelectedId] = useState("");
+  const [createMode, setCreateMode] = useState(false);
+  const [editor, setEditor] = useState<EditorState>(() => defaultEditor(today, FIELD_OPTIONS));
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
-  const [fieldOptions, setFieldOptions] = useState<FieldOption[]>(FIELD_OPTIONS);
+  const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
-  const [editingBooking, setEditingBooking] = useState<BookingRequest | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [fieldOptions, setFieldOptions] = useState<FieldOption[]>(FIELD_OPTIONS);
 
   function showNotice(type: "success" | "error", text: string) {
     setNotice({ type, text });
     window.setTimeout(() => {
       setNotice((current) => (current?.text === text ? null : current));
-    }, 2600);
+    }, 3000);
   }
 
   async function load() {
-    const response = await fetch("/api/bookings");
+    const response = await fetch("/api/bookings", { cache: "no-store" });
     if (response.status === 401) {
       window.location.href = "/admin/login";
       return;
     }
-    setRequests(await response.json());
+    const data = (await response.json()) as BookingRequest[];
+    setBookings(data.map(enrichBooking));
     setLoading(false);
   }
 
   async function loadSettings() {
     const response = await fetch("/api/settings", { cache: "no-store" });
     const settings = await response.json();
-    setFieldOptions((options) =>
-      options.map((item) => ({
+    setFieldOptions((items) =>
+      items.map((item) => ({
         ...item,
         price: settings.prices?.[item.id] ?? item.price,
       })),
@@ -114,97 +187,159 @@ export default function AdminDashboard() {
   }
 
   useEffect(() => {
-    load();
-    loadSettings().catch(() => undefined);
+    void load();
+    void loadSettings();
   }, []);
 
-  const selected = requests.find((item) => item.id === selectedId);
+  const selectedBooking = useMemo(
+    () => bookings.find((item) => item.id === selectedId),
+    [bookings, selectedId],
+  );
 
-  const filtered = useMemo(() => {
-    const value = query.toLowerCase();
-    const byTab = requests.filter((item) => {
-      if (tab === "confirmed") return item.status === "confirmed";
-      if (tab === "trash") return item.status === "deleted";
-      if (tab === "schedule") return item.status !== "cancelled" && item.status !== "deleted";
-      return item.status !== "confirmed" && item.status !== "deleted";
-    });
-    return byTab.filter((item) =>
-      [item.id, item.name, item.phone, item.team, item.source, item.sourceDetail]
-        .join(" ")
-        .toLowerCase()
-        .includes(value),
-    );
-  }, [query, requests, tab]);
+  useEffect(() => {
+    if (createMode) {
+      setEditor(defaultEditor(selectedDate, fieldOptions));
+      return;
+    }
+    if (selectedBooking) {
+      setEditor(editorFromBooking(selectedBooking));
+    }
+  }, [createMode, selectedBooking, selectedDate, fieldOptions]);
 
-  const groupedFiltered = useMemo(() => groupRequestsByCreatedDate(filtered), [filtered]);
+  const scheduleBookings = useMemo(() => {
+    const active = bookings.filter((item) => item.status !== "deleted");
+    const source = query.trim()
+      ? active.filter((item) => matchQuery(item, query))
+      : active.filter((item) => item.date === selectedDate);
+    return [...source].sort(bookingSort);
+  }, [bookings, query, selectedDate]);
 
-  async function update(id: string, patch: Partial<BookingRequest>) {
-    const previous = requests;
-    setRequests((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  const trashBookings = useMemo(
+    () => bookings.filter((item) => item.status === "deleted" && matchQuery(item, query)).sort(bookingSort),
+    [bookings, query],
+  );
+
+  async function persistPatch(id: string, patch: Partial<BookingRequest>) {
     const response = await fetch(`/api/bookings/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-    if (response.ok) {
-      const updated = await response.json();
-      setRequests((items) => items.map((item) => (item.id === id ? updated : item)));
-      showNotice("success", actionNotice(patch));
-    } else {
-      setRequests(previous);
-      showNotice("error", "Не удалось сохранить изменения");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Не удалось сохранить изменения");
+    const updated = enrichBooking(result as BookingRequest);
+    setBookings((current) => current.map((item) => (item.id === id ? updated : item)));
+    setSelectedId(updated.id);
+    return updated;
+  }
+
+  async function saveBooking(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      const listPrice = calculateListPrice(fieldOptions, editor.format, editor.duration);
+      const salePrice = Number(editor.salePrice) || listPrice;
+      const payload = {
+        date: editor.date,
+        time: editor.time,
+        duration: Number(editor.duration) || 60,
+        format: editor.format,
+        sector: editor.sector,
+        listPrice,
+        salePrice,
+        price: salePrice,
+        name: editor.name,
+        phone: editor.phone,
+        team: editor.team,
+        source: editor.source || "Администратор",
+        sourceDetail: editor.sourceDetail || "",
+      };
+
+      if (editor.id) {
+        await persistPatch(editor.id, {
+          ...payload,
+          comment: editor.comment,
+          status: editor.status,
+        });
+        showNotice("success", "Бронь обновлена");
+      } else {
+        const createResponse = await fetch("/api/bookings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const created = await createResponse.json();
+        if (!createResponse.ok) {
+          throw new Error(created.error || "Не удалось создать бронь");
+        }
+
+        const finalized = await persistPatch((created as BookingRequest).id, {
+          status: editor.status,
+          comment: editor.comment,
+          source: payload.source,
+          sourceDetail: payload.sourceDetail,
+        });
+        setBookings((current) => [finalized, ...current.filter((item) => item.id !== finalized.id)]);
+        setCreateMode(false);
+        showNotice("success", "Бронь создана");
+      }
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    } finally {
+      setSaving(false);
     }
   }
 
-  async function addPayment(bookingId: string, payment: { amount: number; date: string; method: string; recipient: string }) {
-    const response = await fetch(`/api/bookings/${bookingId}/payments`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payment),
-    });
-    if (response.ok) {
-      const updated = await response.json();
-      setRequests((items) => items.map((item) => (item.id === bookingId ? updated : item)));
-      if (editingBooking?.id === bookingId) setEditingBooking(updated);
+  async function addPayment(payment: Omit<PaymentRecord, "id">) {
+    if (!selectedBooking) return;
+    setSaving(true);
+    try {
+      const payments = [
+        ...selectedBooking.payments,
+        {
+          id: `PAY-${Date.now()}`,
+          ...payment,
+        },
+      ];
+      await persistPatch(selectedBooking.id, { payments });
       showNotice("success", "Оплата добавлена");
-    } else {
-      showNotice("error", "Не удалось добавить оплату");
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    } finally {
+      setSaving(false);
     }
   }
 
-  async function deletePayment(bookingId: string, paymentId: string) {
-    const response = await fetch(`/api/bookings/${bookingId}/payments?paymentId=${paymentId}`, {
-      method: "DELETE",
-    });
-    if (response.ok) {
-      const updated = await response.json();
-      setRequests((items) => items.map((item) => (item.id === bookingId ? updated : item)));
-      if (editingBooking?.id === bookingId) setEditingBooking(updated);
-      showNotice("success", "Оплата удалена");
-    } else {
-      showNotice("error", "Не удалось удалить оплату");
+  async function moveToTrash(id: string) {
+    try {
+      await persistPatch(id, { status: "deleted", deletedAt: new Date().toISOString() });
+      showNotice("success", "Бронь отправлена в корзину");
+    } catch (error) {
+      showNotice("error", noticeText(error));
     }
   }
 
-  async function handleCreateBooking(input: Partial<BookingInput>) {
-    const response = await fetch("/api/bookings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
-    if (response.ok) {
-      const created = await response.json();
-      await fetch(`/api/bookings/${created.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "confirmed" }),
-      });
-      await load();
-      setShowCreateModal(false);
-      showNotice("success", "Бронь создана");
-    } else {
+  async function restoreFromTrash(id: string) {
+    try {
+      await persistPatch(id, { status: "confirmed", deletedAt: "" });
+      showNotice("success", "Бронь восстановлена");
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
+  }
+
+  async function deleteForever(id: string) {
+    try {
+      const response = await fetch(`/api/bookings/${id}`, { method: "DELETE" });
       const result = await response.json();
-      showNotice("error", result.error || "Не удалось создать бронь");
+      if (!response.ok) throw new Error(result.error || "Не удалось удалить бронь");
+      setBookings((current) => current.filter((item) => item.id !== id));
+      if (selectedId === id) {
+        setSelectedId("");
+      }
+      showNotice("success", "Бронь удалена окончательно");
+    } catch (error) {
+      showNotice("error", noticeText(error));
     }
   }
 
@@ -221,19 +356,13 @@ export default function AdminDashboard() {
         </a>
         <nav>
           <button className={tab === "schedule" ? "active" : ""} onClick={() => setTab("schedule")}>
-            <Calendar size={18} /> График
-          </button>
-          <button className={tab === "requests" ? "active" : ""} onClick={() => setTab("requests")}>
-            <UsersRound size={18} /> Заявки <span>{requests.filter((item) => item.status !== "confirmed" && item.status !== "deleted").length}</span>
-          </button>
-          <button className={tab === "confirmed" ? "active" : ""} onClick={() => setTab("confirmed")}>
-            <Check size={18} /> Подтвержденные <span>{requests.filter((item) => item.status === "confirmed").length}</span>
+            <CalendarDays size={18} /> График
           </button>
           <button className={tab === "repeat" ? "active" : ""} onClick={() => setTab("repeat")}>
-            <Repeat size={18} /> Расписание
+            <CopyPlus size={18} /> Повтор
           </button>
           <button className={tab === "trash" ? "active" : ""} onClick={() => setTab("trash")}>
-            <Trash2 size={18} /> Корзина <span>{requests.filter((item) => item.status === "deleted").length}</span>
+            <Trash2 size={18} /> Корзина
           </button>
           <button className={tab === "analytics" ? "active" : ""} onClick={() => setTab("analytics")}>
             <BarChart3 size={18} /> Аналитика
@@ -253,302 +382,544 @@ export default function AdminDashboard() {
         </div>
 
         {tab === "schedule" && (
-          <ScheduleView
-            bookings={requests}
-            fieldOptions={fieldOptions}
-            selectedDate={selectedDate}
-            onDateChange={setSelectedDate}
-            onSelectBooking={(id) => {
-              const booking = requests.find((b) => b.id === id);
-              if (booking) setEditingBooking(booking);
-            }}
-            onDeleteBooking={(id) => update(id, { status: "deleted", deletedAt: new Date().toISOString() })}
-            onAddBooking={() => setShowCreateModal(true)}
-          />
-        )}
-
-        {(tab === "requests" || tab === "confirmed" || tab === "trash") && (
           <>
             <div className="admin-heading">
               <div>
-                <div className="section-kicker">Управление</div>
-                <h1>{tab === "confirmed" ? "Подтвержденные брони" : tab === "trash" ? "Корзина заявок" : "Заявки клиентов"}</h1>
-                <p>{tab === "trash" ? "Удаленные заявки сохраняются для истории и аналитики." : "Проверьте детали, оплату и подтвердите бронь."}</p>
+                <div className="section-kicker">График</div>
+                <h1>Расписание на день</h1>
+                <p>Календарь, дневной список, редактирование и оплаты на одном экране.</p>
               </div>
-              <div className="stat-chip"><CircleDollarSign size={18} /><span>Всего</span><strong>{filtered.length} записей</strong></div>
+              <div className="schedule-head-actions">
+                <button
+                  className="secondary-button"
+                  onClick={() => {
+                    setCreateMode(true);
+                    setSelectedId("");
+                    setEditor(defaultEditor(selectedDate, fieldOptions));
+                  }}
+                  type="button"
+                >
+                  <Plus size={16} /> Новая бронь
+                </button>
+                <button className="secondary-button" onClick={() => void load()} type="button">
+                  <RefreshCcw size={16} /> Обновить
+                </button>
+              </div>
             </div>
-            <div className="admin-content-grid">
-              <section className="admin-card requests-card">
-                <div className="toolbar">
-                  <div className="search-box"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по имени, телефону..." /></div>
+
+            <div className="admin-schedule-grid">
+              <section className="admin-card schedule-panel">
+                <div className="schedule-toolbar">
+                  <CalendarPicker value={selectedDate} onChange={setSelectedDate} />
+                  <div className="search-box schedule-search">
+                    <Search size={16} />
+                    <input
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder="Поиск по имени, телефону, команде"
+                    />
+                  </div>
                 </div>
-                <div className="request-list">
-                  {loading ? (
-                    <div className="empty-state">Загружаем заявки...</div>
-                  ) : (
-                    groupedFiltered.map((group) => (
-                      <div className="request-date-group" key={group.label}>
-                        <div className="request-date-group-title">{group.label}</div>
-                        {group.items.map((item) => (
-                          <div className={`request-row ${selectedId === item.id ? "selected" : ""}`} key={item.id}>
-                            <span className={`status-dot ${item.status}`} />
-                            <button className="request-open-button" onClick={() => setSelectedId(item.id)} type="button">
-                              <span className="request-person">
-                                <strong>{item.name}</strong>
-                                <small>{item.team || "Без команды"} · {item.phone}</small>
-                              </span>
-                              <span className="request-date">
-                                <strong>{item.date.slice(5).split("-").reverse().join(".")}</strong>
-                                <small>{item.time} · {fieldOptions.find((field) => field.id === item.format)?.shortLabel}</small>
-                              </span>
-                              <span className={`payment-badge ${item.paymentStatus}`}>{paymentLabel[item.paymentStatus]}</span>
-                              <ChevronRight size={16} />
-                            </button>
-                            <button
-                              aria-label={tab === "trash" ? `Восстановить заявку ${item.id}` : `Удалить заявку ${item.id}`}
-                              className="request-delete-button"
-                              onClick={() => update(item.id, tab === "trash" ? { status: "new", deletedAt: "" } : { status: "deleted", deletedAt: new Date().toISOString() })}
-                              type="button"
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                        ))}
+                <div className="schedule-day-head">
+                  <div>
+                    <strong>{query.trim() ? "Результаты поиска" : `Дата ${selectedDate}`}</strong>
+                    <small>{query.trim() ? `${scheduleBookings.length} совпадений` : "Карточки окрашены по статусу оплаты"}</small>
+                  </div>
+                </div>
+                <div className="schedule-list">
+                  {loading && <div className="empty-state">Загружаем график...</div>}
+                  {!loading && scheduleBookings.length === 0 && <div className="empty-state">На выбранный период броней нет</div>}
+                  {scheduleBookings.map((booking) => (
+                    <button
+                      className={`schedule-card ${paymentClass(booking)} ${selectedId === booking.id && !createMode ? "selected" : ""}`}
+                      key={booking.id}
+                      onClick={() => {
+                        setCreateMode(false);
+                        setSelectedId(booking.id);
+                      }}
+                      type="button"
+                    >
+                      <div className="schedule-card-time">
+                        <strong>{booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
+                        <span>{formatDuration(booking.duration)}</span>
+                        {query.trim() && <small>{booking.date}</small>}
                       </div>
-                    ))
-                  )}
-                  {!loading && filtered.length === 0 && <div className="empty-state">Записей пока нет</div>}
+                      <div className="schedule-card-body">
+                        <div className="schedule-card-top">
+                          <strong>{booking.name}</strong>
+                          <span>{formatPrice(booking.salePrice || booking.price)}</span>
+                        </div>
+                        <div className="schedule-card-format">{formatLabel(booking.format)}</div>
+                        <div className="schedule-card-meta">
+                          <span>{booking.sector}</span>
+                          <span>{booking.team || booking.phone}</span>
+                        </div>
+                        {booking.comment && <div className="schedule-card-comment">{booking.comment}</div>}
+                      </div>
+                    </button>
+                  ))}
                 </div>
               </section>
-              <RequestDetailsPanel selected={selected} update={update} fieldOptions={fieldOptions} mode={tab} addPayment={addPayment} deletePayment={deletePayment} />
+
+              <BookingEditor
+                booking={selectedBooking}
+                createMode={createMode}
+                editor={editor}
+                fieldOptions={fieldOptions}
+                onAddPayment={addPayment}
+                onChange={setEditor}
+                onDelete={() => selectedBooking && void moveToTrash(selectedBooking.id)}
+                onSave={saveBooking}
+                onCancelCreate={() => setCreateMode(false)}
+                saving={saving}
+              />
             </div>
           </>
         )}
 
         {tab === "repeat" && (
-          <RepeatSchedule bookings={requests} fieldOptions={fieldOptions} onCreated={load} />
+          <RepeatPlanner
+            bookings={bookings}
+            onComplete={async (message) => {
+              await load();
+              showNotice("success", message);
+            }}
+          />
         )}
 
-        {tab === "settings" && (
-          <PriceSettings fieldOptions={fieldOptions} onChange={setFieldOptions} />
+        {tab === "trash" && (
+          <>
+            <div className="admin-heading">
+              <div>
+                <div className="section-kicker">Корзина</div>
+                <h1>Удаленные брони</h1>
+                <p>Можно восстановить бронь или удалить запись из Google Sheets навсегда.</p>
+              </div>
+            </div>
+            <section className="admin-card trash-list">
+              <div className="toolbar">
+                <div className="search-box">
+                  <Search size={16} />
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск в корзине" />
+                </div>
+              </div>
+              {trashBookings.length === 0 ? (
+                <div className="empty-state">Корзина пуста</div>
+              ) : trashBookings.map((booking) => (
+                <div className="trash-row" key={booking.id}>
+                  <div>
+                    <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
+                    <small>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</small>
+                  </div>
+                  <div className="trash-actions">
+                    <button className="secondary-button" onClick={() => void restoreFromTrash(booking.id)} type="button">Восстановить</button>
+                    <button className="danger-button" onClick={() => void deleteForever(booking.id)} type="button">Удалить навсегда</button>
+                  </div>
+                </div>
+              ))}
+            </section>
+          </>
         )}
 
-        {tab === "analytics" && (
-          <AnalyticsDashboard requests={requests} />
-        )}
+        {tab === "analytics" && <AnalyticsDashboard bookings={bookings} />}
+        {tab === "settings" && <PriceSettings fieldOptions={fieldOptions} onChange={setFieldOptions} />}
       </main>
-
-      {(editingBooking || showCreateModal) && (
-        <BookingEditModal
-          booking={editingBooking}
-          fieldOptions={fieldOptions}
-          allBookings={requests}
-          onClose={() => { setEditingBooking(null); setShowCreateModal(false); }}
-          onSave={async (id, patch) => { await update(id, patch); setEditingBooking(null); }}
-          onDelete={(id) => { update(id, { status: "deleted", deletedAt: new Date().toISOString() }); setEditingBooking(null); }}
-          onAddPayment={addPayment}
-          onDeletePayment={deletePayment}
-          onCreate={handleCreateBooking}
-          isCreateMode={showCreateModal}
-          defaultDate={selectedDate}
-        />
-      )}
     </div>
   );
 }
 
-function RequestDetailsPanel({
-  selected,
-  update,
+function BookingEditor({
+  booking,
+  createMode,
+  editor,
   fieldOptions,
-  mode,
-  addPayment,
-  deletePayment,
+  onAddPayment,
+  onChange,
+  onDelete,
+  onSave,
+  onCancelCreate,
+  saving,
 }: {
-  selected?: BookingRequest;
-  update: (id: string, patch: Partial<BookingRequest>) => Promise<void>;
+  booking?: BookingRequest;
+  createMode: boolean;
+  editor: EditorState;
   fieldOptions: FieldOption[];
-  mode: Tab;
-  addPayment: (bookingId: string, payment: { amount: number; date: string; method: string; recipient: string }) => Promise<void>;
-  deletePayment: (bookingId: string, paymentId: string) => Promise<void>;
+  onAddPayment: (payment: Omit<PaymentRecord, "id">) => Promise<void>;
+  onChange: (editor: EditorState) => void;
+  onDelete: () => void;
+  onSave: (event: FormEvent) => Promise<void>;
+  onCancelCreate: () => void;
+  saving: boolean;
 }) {
-  const [prepayment, setPrepayment] = useState("");
-  const [salePricePerHour, setSalePricePerHour] = useState("");
-  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("unpaid");
-  const [paymentMethod, setPaymentMethod] = useState("Не выбран");
-  const [paymentRecipient, setPaymentRecipient] = useState("Не выбран");
-  const [paidAt, setPaidAt] = useState("");
-  const [comment, setComment] = useState("");
-
-  const [payAmount, setPayAmount] = useState("");
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
-  const [payMethod, setPayMethod] = useState("Не выбран");
-  const [payRecipient, setPayRecipient] = useState("Не выбран");
+  const listPrice = calculateListPrice(fieldOptions, editor.format, editor.duration);
+  const paymentTotal = booking?.prepayment || 0;
+  const balance = Math.max(0, (Number(editor.salePrice) || listPrice) - paymentTotal);
+  const sectorOptions = SECTORS[editor.format];
+  const [paymentForm, setPaymentForm] = useState({
+    amount: "",
+    date: localDateValue(),
+    method: "Не выбран",
+    recipient: "Не выбран",
+  });
 
   useEffect(() => {
-    if (!selected) return;
-    const hours = Math.max(1, selected.duration / 60);
-    setPrepayment(selected.prepayment ? String(selected.prepayment) : "");
-    setSalePricePerHour(String(Math.round((selected.salePrice || selected.price || 0) / hours)));
-    setPaymentStatus(selected.paymentStatus);
-    setPaymentMethod(selected.payments?.[0]?.method || "Не выбран");
-    setPaymentRecipient(selected.payments?.[0]?.recipient || "Не выбран");
-    setPaidAt(selected.payments?.[0]?.date || "");
-    setComment(selected.comment);
-    setPayAmount("");
-    setPayMethod("Не выбран");
-    setPayRecipient("Не выбран");
-    setPayDate(new Date().toISOString().slice(0, 10));
-  }, [selected]);
+    setPaymentForm({
+      amount: "",
+      date: localDateValue(),
+      method: "Не выбран",
+      recipient: "Не выбран",
+    });
+  }, [booking?.id]);
 
-  if (!selected) {
+  if (!createMode && !booking) {
     return (
-      <aside className="admin-card details-card empty-details">
-        <UsersRound size={30} />
-        <strong>Выберите заявку</strong>
-        <span>Здесь появятся детали клиента и оплаты</span>
+      <aside className="admin-card booking-editor empty-details">
+        <CalendarDays size={28} />
+        <strong>Выберите бронь</strong>
+        <span>Справа откроется редактирование, оплаты и действия с записью.</span>
       </aside>
     );
   }
 
-  const selectedHours = Math.max(1, selected.duration / 60);
-  const numericSalePricePerHour = Number(salePricePerHour) || 0;
-  const numericSalePrice = Math.round(numericSalePricePerHour * selectedHours);
-  const totalPaid = (selected.payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
-  const balance = Math.max(0, numericSalePrice - totalPaid);
-  const listPricePerHour = Math.round((selected.listPrice || selected.price) / selectedHours);
-
-  const financePatch = {
-    salePrice: numericSalePrice,
-    price: numericSalePrice,
-    prepayment: totalPaid,
-    balance,
-    paymentStatus,
-    comment,
-  };
-
   return (
-    <aside className="admin-card details-card">
-      <div className="details-head">
+    <aside className="admin-card booking-editor">
+      <div className="editor-head">
         <div>
-          <small>{selected.id}</small>
-          <h2>{selected.name}</h2>
-          <p>{selected.team || "Без команды"} · {selected.phone}</p>
+          <small>{createMode ? "Новая запись" : booking?.id}</small>
+          <h2>{createMode ? "Создание брони" : booking?.name}</h2>
+          <p>{createMode ? "Новая бронь сразу попадет в график администратора." : `${booking?.team || "Без команды"} · ${booking?.phone}`}</p>
         </div>
-        <span className={`status-label ${selected.status}`}>{statusLabel[selected.status]}</span>
-      </div>
-      <div className="booking-facts">
-        <div><span>Дата и время</span><strong>{selected.date} · {selected.time}–{bookingEndTime(selected.time, selected.duration)}</strong></div>
-        <div><span>Формат</span><strong>{fieldOptions.find((item) => item.id === selected.format)?.shortLabel}, сектор {selected.sector}</strong></div>
-        <div><span>Цена по прайсу</span><strong>{formatPrice(selected.listPrice || selected.price)}</strong></div>
-        <div><span>Фактическая цена</span><strong>{formatPrice(selected.salePrice || selected.price)}</strong></div>
-        <div><span>Оплачено</span><strong>{formatPrice(totalPaid)}</strong></div>
-        <div><span>Остаток</span><strong>{formatPrice(balance)}</strong></div>
+        {!createMode && booking && <span className={`payment-badge ${booking.paymentStatus}`}>{booking.paymentStatus === "paid" ? "Оплачено" : booking.paymentStatus === "deposit" ? "Частично" : "Не оплачено"}</span>}
       </div>
 
-      <div className="details-form">
-        <h3>Оплата и комментарий</h3>
-        <div className="form-field">
-          <label>Индивидуальная стоимость за час</label>
-          <input min="0" type="number" value={salePricePerHour} onFocus={() => salePricePerHour === "0" && setSalePricePerHour("")} onChange={(event) => setSalePricePerHour(event.target.value)} />
-          <small>Прайс: {formatPrice(listPricePerHour)} / час. Итого: {formatPrice(numericSalePrice)}</small>
+      <form className="editor-form" onSubmit={(event) => void onSave(event)}>
+        <div className="editor-grid">
+          <label className="form-field">
+            <span>Дата</span>
+            <input type="date" value={editor.date} onChange={(event) => onChange({ ...editor, date: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Время</span>
+            <input type="time" step={1800} value={editor.time} onChange={(event) => onChange({ ...editor, time: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Длительность</span>
+            <select value={editor.duration} onChange={(event) => onChange({ ...editor, duration: Number(event.target.value) })}>
+              {[60, 90, 120, 150, 180, 210, 240].map((value) => <option key={value} value={value}>{formatDuration(value)}</option>)}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Формат</span>
+            <select
+              value={editor.format}
+              onChange={(event) => {
+                const format = event.target.value as FieldFormat;
+                onChange({
+                  ...editor,
+                  format,
+                  sector: SECTORS[format][0].id,
+                  salePrice: String(calculateListPrice(fieldOptions, format, editor.duration)),
+                });
+              }}
+            >
+              {fieldOptions.map((item) => <option key={item.id} value={item.id}>{item.shortLabel}</option>)}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Сектор</span>
+            <select value={editor.sector} onChange={(event) => onChange({ ...editor, sector: event.target.value })}>
+              {sectorOptions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Статус</span>
+            <select value={editor.status} onChange={(event) => onChange({ ...editor, status: event.target.value as BookingRequest["status"] })}>
+              <option value="confirmed">Подтверждена</option>
+              <option value="in_progress">В работе</option>
+              <option value="new">Новая</option>
+              <option value="cancelled">Отменена</option>
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Имя клиента</span>
+            <input required value={editor.name} onChange={(event) => onChange({ ...editor, name: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Телефон</span>
+            <input required value={editor.phone} onChange={(event) => onChange({ ...editor, phone: event.target.value })} />
+          </label>
+          <label className="form-field editor-span-2">
+            <span>Организация / команда</span>
+            <input value={editor.team} onChange={(event) => onChange({ ...editor, team: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Источник</span>
+            <input value={editor.source} onChange={(event) => onChange({ ...editor, source: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Деталь источника</span>
+            <input value={editor.sourceDetail} onChange={(event) => onChange({ ...editor, sourceDetail: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Стоимость по прайсу</span>
+            <input disabled value={formatPrice(listPrice)} />
+          </label>
+          <label className="form-field">
+            <span>Фактическая стоимость</span>
+            <input type="number" min="0" value={editor.salePrice} onChange={(event) => onChange({ ...editor, salePrice: event.target.value })} />
+          </label>
+          <label className="form-field editor-span-2">
+            <span>Комментарий</span>
+            <textarea rows={4} value={editor.comment} onChange={(event) => onChange({ ...editor, comment: event.target.value })} />
+          </label>
         </div>
-        <div className="form-field">
-          <label>Статус оплаты</label>
-          <select value={paymentStatus} onChange={(event) => setPaymentStatus(event.target.value as PaymentStatus)}>
-            <option value="unpaid">Не оплачено</option>
-            <option value="deposit">Частично оплачено</option>
-            <option value="paid">Полностью оплачено</option>
-          </select>
-        </div>
-        <div className="form-field"><label>Комментарий</label><textarea rows={3} value={comment} onChange={(event) => setComment(event.target.value)} /></div>
-      </div>
 
-      {(selected.payments || []).length > 0 && (
-        <div className="payment-history-section">
-          <h3>История оплат</h3>
-          {selected.payments!.map((pay) => (
-            <div className="payment-record" key={pay.id}>
-              <div className="payment-record-info">
-                <strong>{formatPrice(pay.amount)}</strong>
-                <small>{pay.date} · {pay.method}{pay.recipient && pay.recipient !== "Не выбран" ? ` · ${pay.recipient}` : ""}</small>
+        <div className="editor-totals">
+          <div><span>Стоимость</span><strong>{formatPrice(Number(editor.salePrice) || listPrice)}</strong></div>
+          <div><span>Оплачено</span><strong>{formatPrice(paymentTotal)}</strong></div>
+          <div><span>Остаток</span><strong>{formatPrice(balance)}</strong></div>
+        </div>
+
+        <div className="editor-actions">
+          {createMode ? (
+            <>
+              <button className="secondary-button" onClick={onCancelCreate} type="button">Отмена</button>
+              <button className="primary-button" disabled={saving} type="submit"><Save size={16} /> Сохранить</button>
+            </>
+          ) : (
+            <>
+              <button className="danger-button" onClick={onDelete} type="button"><Trash2 size={16} /> В корзину</button>
+              <button className="primary-button" disabled={saving} type="submit"><Save size={16} /> Сохранить</button>
+            </>
+          )}
+        </div>
+      </form>
+
+      {!createMode && booking && (
+        <section className="payments-section">
+          <div className="payments-head">
+            <h3>История оплат</h3>
+            <small>Каждая оплата хранится отдельной записью</small>
+          </div>
+          <div className="payment-history">
+            {booking.payments.length === 0 && <div className="empty-inline">Оплат пока нет</div>}
+            {booking.payments.map((payment) => (
+              <div className="payment-history-row" key={payment.id}>
+                <strong>{formatPrice(payment.amount)}</strong>
+                <span>{payment.date || "Без даты"}</span>
+                <span>{payment.method}</span>
+                <span>{payment.recipient}</span>
               </div>
-              <button className="payment-delete-btn" onClick={() => deletePayment(selected.id, pay.id)} type="button">
-                <Trash2 size={13} />
-              </button>
+            ))}
+          </div>
+          <form
+            className="payment-add-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void onAddPayment({
+                amount: Number(paymentForm.amount) || 0,
+                date: paymentForm.date,
+                method: paymentForm.method,
+                recipient: paymentForm.recipient,
+              });
+            }}
+          >
+            <div className="editor-grid">
+              <label className="form-field">
+                <span>Сумма</span>
+                <input type="number" min="0" required value={paymentForm.amount} onChange={(event) => setPaymentForm({ ...paymentForm, amount: event.target.value })} />
+              </label>
+              <label className="form-field">
+                <span>Дата</span>
+                <input type="date" required value={paymentForm.date} onChange={(event) => setPaymentForm({ ...paymentForm, date: event.target.value })} />
+              </label>
+              <label className="form-field">
+                <span>Способ оплаты</span>
+                <select value={paymentForm.method} onChange={(event) => setPaymentForm({ ...paymentForm, method: event.target.value })}>
+                  {paymentMethods.map((method) => <option key={method}>{method}</option>)}
+                </select>
+              </label>
+              <label className="form-field">
+                <span>Получатель</span>
+                <select value={paymentForm.recipient} onChange={(event) => setPaymentForm({ ...paymentForm, recipient: event.target.value })}>
+                  {paymentRecipients.map((recipient) => <option key={recipient}>{recipient}</option>)}
+                </select>
+              </label>
             </div>
-          ))}
-        </div>
+            <button className="secondary-button" disabled={saving} type="submit"><CircleDollarSign size={16} /> Добавить оплату</button>
+          </form>
+        </section>
       )}
-
-      <div className="add-payment-form">
-        <h3>Добавить оплату</h3>
-        <div className="form-field">
-          <label>Сумма</label>
-          <input min="0" type="number" value={payAmount} onChange={(event) => setPayAmount(event.target.value)} placeholder="0" />
-        </div>
-        <div className="form-field">
-          <label>Дата</label>
-          <input type="date" value={payDate} onChange={(event) => setPayDate(event.target.value)} />
-        </div>
-        <div className="form-field">
-          <label>Способ оплаты</label>
-          <select value={payMethod} onChange={(event) => setPayMethod(event.target.value)}>
-            {PAYMENT_METHODS.map((m) => <option key={m}>{m}</option>)}
-          </select>
-        </div>
-        <div className="form-field">
-          <label>Получатель</label>
-          <select value={payRecipient} onChange={(event) => setPayRecipient(event.target.value)}>
-            {PAYMENT_RECIPIENTS.map((r) => <option key={r}>{r}</option>)}
-          </select>
-        </div>
-        <button
-          className="secondary-button"
-          disabled={!payAmount || Number(payAmount) <= 0}
-          onClick={() => addPayment(selected.id, { amount: Number(payAmount), date: payDate, method: payMethod, recipient: payRecipient })}
-          type="button"
-        >
-          Добавить оплату
-        </button>
-      </div>
-
-      <div className="details-actions">
-        {mode === "trash" ? (
-          <button className="primary-button" onClick={() => update(selected.id, { ...financePatch, status: "new", deletedAt: "" })}>Восстановить заявку</button>
-        ) : (
-          <>
-            <button className="secondary-button" onClick={() => update(selected.id, { ...financePatch, status: "in_progress" })}>В работу</button>
-            <button className="danger-button" onClick={() => update(selected.id, { ...financePatch, status: "cancelled" })}>Отменить</button>
-            <button className="danger-button" onClick={() => update(selected.id, { ...financePatch, status: "deleted", deletedAt: new Date().toISOString() })}><Trash2 size={16} /> Удалить</button>
-            <button className="primary-button" onClick={() => update(selected.id, { ...financePatch, status: "confirmed" })}><Check size={16} /> Подтвердить</button>
-          </>
-        )}
-      </div>
     </aside>
   );
 }
 
-function AnalyticsDashboard({ requests }: { requests: BookingRequest[] }) {
-  const active = requests.filter((item) => item.status !== "cancelled" && item.status !== "deleted");
-  const confirmed = requests.filter((item) => item.status === "confirmed");
-  const totalPaid = confirmed.reduce((sum, item) => sum + (item.payments || []).reduce((s, p) => s + (p.amount || 0), 0), 0);
-  const revenue = confirmed.reduce((sum, item) => sum + (Number(item.salePrice || item.price) || 0), 0);
-  const debt = confirmed.reduce((sum, item) => sum + (Number(item.balance) || 0), 0);
-  const hours = confirmed.reduce((sum, item) => sum + ((Number(item.duration) || 0) / 60), 0);
-  const averageCheck = confirmed.length ? Math.round(revenue / confirmed.length) : 0;
-  const uniquePhones = new Set(active.map((item) => item.phone.replace(/\D/g, "")).filter(Boolean)).size;
-  const repeatClients = Array.from(
-    active.reduce<Map<string, number>>((map, item) => {
-      const key = item.phone.replace(/\D/g, "");
-      if (!key) return map;
-      map.set(key, (map.get(key) || 0) + 1);
-      return map;
-    }, new Map()).values(),
-  ).filter((count) => count > 1).length;
+function RepeatPlanner({
+  bookings,
+  onComplete,
+}: {
+  bookings: BookingRequest[];
+  onComplete: (message: string) => Promise<void>;
+}) {
+  const today = localDateValue();
+  const [sourceFrom, setSourceFrom] = useState(today);
+  const [sourceTo, setSourceTo] = useState(today);
+  const [mode, setMode] = useState<"once" | "month" | "until">("once");
+  const [targetStart, setTargetStart] = useState(addDays(today, 7));
+  const [untilDate, setUntilDate] = useState(addDays(today, 28));
+  const [working, setWorking] = useState(false);
+  const [result, setResult] = useState("");
 
-  const sourceRows = analyticsRows(active, (item) => item.source || "Сайт");
-  const formatRows = analyticsRows(confirmed, (item) => formatLabel(item.format), "salePrice");
+  const sourceBookings = useMemo(
+    () => bookings
+      .filter((item) => item.status !== "deleted" && item.status !== "cancelled")
+      .filter((item) => item.date >= sourceFrom && item.date <= sourceTo)
+      .sort(bookingSort),
+    [bookings, sourceFrom, sourceTo],
+  );
+
+  async function repeatSchedule(event: FormEvent) {
+    event.preventDefault();
+    if (sourceBookings.length === 0) {
+      setResult("В выбранном исходном периоде нет активных броней.");
+      return;
+    }
+
+    setWorking(true);
+    let created = 0;
+    const conflicts: string[] = [];
+    const shifts: number[] = [];
+    const baseShift = diffDays(sourceFrom, targetStart);
+
+    if (mode === "once") {
+      shifts.push(baseShift);
+    } else if (mode === "month") {
+      for (let index = 0; index < 4; index += 1) shifts.push(baseShift + index * 7);
+    } else {
+      for (let shift = baseShift; addDays(sourceTo, shift) <= untilDate; shift += 7) shifts.push(shift);
+    }
+
+    try {
+      for (const shift of shifts) {
+        for (const booking of sourceBookings) {
+          const payload = {
+            date: addDays(booking.date, shift),
+            time: booking.time,
+            duration: booking.duration,
+            format: booking.format,
+            sector: booking.sector,
+            listPrice: booking.listPrice,
+            salePrice: booking.salePrice,
+            price: booking.salePrice,
+            name: booking.name,
+            phone: booking.phone,
+            team: booking.team,
+            source: "Повтор расписания",
+            sourceDetail: `${booking.date} ${booking.time}`,
+          };
+
+          const response = await fetch("/api/bookings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json();
+
+          if (!response.ok) {
+            conflicts.push(result.error || `${payload.date} ${payload.time}`);
+            continue;
+          }
+
+          await fetch(`/api/bookings/${(result as BookingRequest).id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              status: "confirmed",
+              comment: `Повторено из ${booking.date} ${booking.time}`,
+            }),
+          });
+          created += 1;
+        }
+      }
+
+      const message = `Создано ${created} броней, конфликтов ${conflicts.length}.`;
+      setResult(conflicts.length ? `${message} Конфликты: ${conflicts.slice(0, 5).join("; ")}` : message);
+      await onComplete(message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="admin-heading">
+        <div>
+          <div className="section-kicker">Повторение</div>
+          <h1>Повторить расписание</h1>
+          <p>Администратор может копировать день, неделю, месяц или продлевать график до даты.</p>
+        </div>
+      </div>
+      <form className="admin-card repeat-card" onSubmit={(event) => void repeatSchedule(event)}>
+        <div className="editor-grid">
+          <label className="form-field">
+            <span>Исходная дата с</span>
+            <input type="date" value={sourceFrom} onChange={(event) => setSourceFrom(event.target.value)} />
+          </label>
+          <label className="form-field">
+            <span>Исходная дата по</span>
+            <input type="date" value={sourceTo} onChange={(event) => setSourceTo(event.target.value)} />
+          </label>
+          <label className="form-field">
+            <span>Сценарий</span>
+            <select value={mode} onChange={(event) => setMode(event.target.value as "once" | "month" | "until")}>
+              <option value="once">Скопировать период один раз</option>
+              <option value="month">Повторить на месяц</option>
+              <option value="until">Продлить до даты</option>
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Начать с даты</span>
+            <input type="date" value={targetStart} onChange={(event) => setTargetStart(event.target.value)} />
+          </label>
+          {mode === "until" && (
+            <label className="form-field editor-span-2">
+              <span>Повторять до даты</span>
+              <input type="date" value={untilDate} onChange={(event) => setUntilDate(event.target.value)} />
+            </label>
+          )}
+        </div>
+        <div className="repeat-preview">
+          <strong>Исходных броней: {sourceBookings.length}</strong>
+          <small>Конфликты не сохраняются: система пропустит занятые слоты и покажет причину.</small>
+        </div>
+        {sourceBookings.length > 0 && (
+          <div className="repeat-source-list">
+            {sourceBookings.slice(0, 8).map((booking) => (
+              <div className="repeat-source-row" key={booking.id}>
+                <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
+                <span>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {result && <div className={`admin-booking-message ${result.includes("Создано") ? "success" : ""}`}>{result}</div>}
+        <button className="primary-button" disabled={working} type="submit">
+          <CopyPlus size={16} /> {working ? "Копируем..." : "Повторить расписание"}
+        </button>
+      </form>
+    </>
+  );
+}
+
+function AnalyticsDashboard({ bookings }: { bookings: BookingRequest[] }) {
+  const active = bookings.filter((item) => item.status !== "cancelled" && item.status !== "deleted");
+  const revenue = active.reduce((sum, item) => sum + (Number(item.salePrice || item.price) || 0), 0);
+  const paid = active.reduce((sum, item) => sum + (Number(item.prepayment) || 0), 0);
+  const debt = active.reduce((sum, item) => sum + (Number(item.balance) || 0), 0);
+  const hours = active.reduce((sum, item) => sum + item.duration / 60, 0);
+  const byFormat = groupStats(active, (item) => formatLabel(item.format), "salePrice");
+  const bySource = groupStats(active, (item) => item.source || "Не указано", "count");
+  const byStatus = groupStats(active, (item) => item.paymentStatus, "count");
 
   return (
     <>
@@ -556,20 +927,19 @@ function AnalyticsDashboard({ requests }: { requests: BookingRequest[] }) {
         <div>
           <div className="section-kicker">Отчеты</div>
           <h1>Аналитика</h1>
-          <p>Сводка строится по текущим заявкам и подтвержденным броням.</p>
+          <p>Сводка по активным и подтвержденным броням.</p>
         </div>
       </div>
       <div className="analytics-grid">
-        <AnalyticsCard label="Выручка" value={formatPrice(revenue)} hint="Подтвержденные брони" />
-        <AnalyticsCard label="Поступило" value={formatPrice(totalPaid)} hint="Сумма оплат" />
-        <AnalyticsCard label="Задолженность" value={formatPrice(debt)} hint="Остаток к оплате" />
-        <AnalyticsCard label="Средний чек" value={formatPrice(averageCheck)} hint={`${confirmed.length} подтвержденных`} />
-        <AnalyticsCard label="Загрузка" value={`${formatNumber(hours)} ч.`} hint="Часы подтвержденных броней" />
-        <AnalyticsCard label="Клиенты" value={String(uniquePhones)} hint={`${repeatClients} повторных`} />
+        <AnalyticsCard label="Выручка" value={formatPrice(revenue)} hint="Плановая сумма броней" />
+        <AnalyticsCard label="Оплачено" value={formatPrice(paid)} hint="По истории оплат" />
+        <AnalyticsCard label="Остаток" value={formatPrice(debt)} hint="К оплате" />
+        <AnalyticsCard label="Часы" value={`${hours.toFixed(1)} ч.`} hint="Общая загрузка" />
       </div>
       <div className="analytics-tables">
-        <AnalyticsTable title="Каналы привлечения" rows={sourceRows} valueLabel="Заявок" />
-        <AnalyticsTable title="Форматы поля" rows={formatRows} valueLabel="Выручка" money />
+        <AnalyticsTable title="Форматы поля" rows={byFormat} money />
+        <AnalyticsTable title="Источники" rows={bySource} />
+        <AnalyticsTable title="Статусы оплаты" rows={byStatus} />
       </div>
     </>
   );
@@ -585,53 +955,58 @@ function AnalyticsCard({ label, value, hint }: { label: string; value: string; h
   );
 }
 
-function AnalyticsTable({ title, rows, valueLabel, money = false }: { title: string; rows: Array<{ label: string; count: number; value: number }>; valueLabel: string; money?: boolean }) {
+function AnalyticsTable({
+  title,
+  rows,
+  money = false,
+}: {
+  title: string;
+  rows: Array<{ label: string; count: number; value: number }>;
+  money?: boolean;
+}) {
   return (
     <section className="admin-card analytics-table">
       <div className="analytics-table-head">
         <h2>{title}</h2>
-        <span>{valueLabel}</span>
+        <span>{money ? "Сумма" : "Количество"}</span>
       </div>
-      {rows.length === 0 ? (
-        <div className="empty-state">Данных пока нет</div>
-      ) : (
-        rows.map((row) => (
-          <div className="analytics-row" key={row.label}>
-            <div>
-              <strong>{row.label}</strong>
-              <small>{row.count} записей</small>
-            </div>
-            <span>{money ? formatPrice(row.value) : formatNumber(row.value)}</span>
+      {rows.map((row) => (
+        <div className="analytics-row" key={row.label}>
+          <div>
+            <strong>{row.label}</strong>
+            <small>{row.count} записей</small>
           </div>
-        ))
-      )}
+          <span>{money ? formatPrice(row.value) : row.value}</span>
+        </div>
+      ))}
+      {rows.length === 0 && <div className="empty-state">Данных пока нет</div>}
     </section>
   );
 }
 
-function analyticsRows(items: BookingRequest[], label: (item: BookingRequest) => string, valueField: "count" | "prepayment" | "salePrice" = "count") {
+function groupStats(
+  items: BookingRequest[],
+  label: (item: BookingRequest) => string,
+  field: "count" | "salePrice",
+) {
   const rows = items.reduce<Map<string, { label: string; count: number; value: number }>>((map, item) => {
-    const key = label(item) || "Не указано";
+    const key = label(item);
     const current = map.get(key) || { label: key, count: 0, value: 0 };
     current.count += 1;
-    current.value += valueField === "prepayment" ? (item.payments || []).reduce((s, p) => s + (p.amount || 0), 0) : valueField === "salePrice" ? Number(item.salePrice || item.price) || 0 : 1;
+    current.value += field === "salePrice" ? Number(item.salePrice || item.price) || 0 : 1;
     map.set(key, current);
     return map;
   }, new Map());
   return Array.from(rows.values()).sort((a, b) => b.value - a.value);
 }
 
-function formatLabel(format: FieldFormat) {
-  if (format === "quarter") return "1/4 поля";
-  if (format === "half") return "1/2 поля";
-  return "Полное поле";
-}
-
-function formatNumber(value: number) {
-  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(value);
-}
-
-function PriceSettings({ fieldOptions, onChange }: { fieldOptions: FieldOption[]; onChange: (options: FieldOption[]) => void }) {
+function PriceSettings({
+  fieldOptions,
+  onChange,
+}: {
+  fieldOptions: FieldOption[];
+  onChange: (value: FieldOption[]) => void;
+}) {
   const [prices, setPrices] = useState<Record<FieldFormat, string>>({
     quarter: String(fieldOptions.find((item) => item.id === "quarter")?.price || 0),
     half: String(fieldOptions.find((item) => item.id === "half")?.price || 0),
@@ -651,7 +1026,6 @@ function PriceSettings({ fieldOptions, onChange }: { fieldOptions: FieldOption[]
   async function save(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
-    setMessage("");
     const nextPrices = {
       quarter: Number(prices.quarter) || 0,
       half: Number(prices.half) || 0,
@@ -662,12 +1036,12 @@ function PriceSettings({ fieldOptions, onChange }: { fieldOptions: FieldOption[]
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prices: nextPrices }),
     });
+    const result = await response.json();
     if (response.ok) {
-      const settings = await response.json();
-      onChange(fieldOptions.map((item) => ({ ...item, price: settings.prices[item.id] ?? item.price })));
+      onChange(fieldOptions.map((item) => ({ ...item, price: result.prices[item.id] ?? item.price })));
       setMessage("Цены сохранены");
     } else {
-      setMessage("Не удалось сохранить цены");
+      setMessage(result.error || "Не удалось сохранить цены");
     }
     setSaving(false);
   }
@@ -677,25 +1051,22 @@ function PriceSettings({ fieldOptions, onChange }: { fieldOptions: FieldOption[]
       <div className="admin-heading">
         <div>
           <div className="section-kicker">Настройки</div>
-          <h1>Стоимость аренды</h1>
-          <p>Цены указываются за 1 час и используются на сайте, в админке и аналитике.</p>
+          <h1>Прайс</h1>
+          <p>Почасовые цены используются в форме, графике и при автоподсчете стоимости.</p>
         </div>
       </div>
-      <form className="admin-card details-form" onSubmit={save}>
-        {fieldOptions.map((option) => (
-          <div className="form-field" key={option.id}>
-            <label>{option.shortLabel}</label>
-            <input
-              min="0"
-              type="number"
-              value={prices[option.id]}
-              onChange={(event) => setPrices({ ...prices, [option.id]: event.target.value })}
-            />
-          </div>
-        ))}
+      <form className="admin-card repeat-card" onSubmit={(event) => void save(event)}>
+        <div className="editor-grid">
+          {fieldOptions.map((option) => (
+            <label className="form-field" key={option.id}>
+              <span>{option.shortLabel}</span>
+              <input type="number" min="0" value={prices[option.id]} onChange={(event) => setPrices({ ...prices, [option.id]: event.target.value })} />
+            </label>
+          ))}
+        </div>
         {message && <div className={`admin-booking-message ${message === "Цены сохранены" ? "success" : ""}`}>{message}</div>}
-        <button className="primary-button admin-create-button" disabled={saving} type="submit">
-          <CircleDollarSign size={17} /> {saving ? "Сохраняем..." : "Сохранить цены"}
+        <button className="primary-button" disabled={saving} type="submit">
+          <CircleDollarSign size={16} /> {saving ? "Сохраняем..." : "Сохранить цены"}
         </button>
       </form>
     </>

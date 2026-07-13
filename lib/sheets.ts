@@ -1,6 +1,6 @@
 import { google } from "googleapis";
+import { conflictMessage, enrichBooking, findBookingConflict } from "./booking";
 import { mockRequests } from "./mock-data";
-import { bookingSlots } from "./time";
 import { BookingInput, BookingRequest, PaymentRecord } from "./types";
 
 const HEADERS = [
@@ -27,7 +27,7 @@ const HEADERS = [
   "Дата оплаты",
   "Комментарий",
   "Удалено",
-  "Платежи",
+  "История оплат JSON",
 ];
 
 const BOOKINGS_CACHE_TTL = 15_000;
@@ -66,16 +66,21 @@ const isAppsScriptConfigured = () =>
   );
 
 async function appsScriptRequest<T>(
-  action: "list" | "create" | "createIfAvailable" | "update" | "batchCreate" | "registerTelegramChat" | "listTelegramChats",
+  action:
+    | "list"
+    | "create"
+    | "createIfAvailable"
+    | "update"
+    | "delete"
+    | "registerTelegramChat"
+    | "listTelegramChats",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const url = process.env.GOOGLE_APPS_SCRIPT_URL!;
   const secret = process.env.GOOGLE_APPS_SCRIPT_SECRET!;
   const response =
     action === "list"
-      ? await fetch(`${url}?secret=${encodeURIComponent(secret)}`, {
-          cache: "no-store",
-        })
+      ? await fetch(`${url}?secret=${encodeURIComponent(secret)}`, { cache: "no-store" })
       : await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -92,11 +97,9 @@ async function appsScriptRequest<T>(
 }
 
 export class BookingConflictError extends Error {
-  conflicts: Array<{ date: string; time: string; existingId: string }>;
-  constructor(conflicts: Array<{ date: string; time: string; existingId: string }> = []) {
-    super("На это время уже есть активная заявка или подтвержденная бронь.");
+  constructor(message = "На это время уже есть конфликтующая бронь.") {
+    super(message);
     this.name = "BookingConflictError";
-    this.conflicts = conflicts;
   }
 }
 
@@ -117,7 +120,15 @@ function upsertCachedBooking(booking: BookingRequest) {
   const cached = getCachedBookings();
   if (!cached) return;
   const exists = cached.some((item) => item.id === booking.id);
-  setCachedBookings(exists ? cached.map((item) => (item.id === booking.id ? booking : item)) : [booking, ...cached]);
+  setCachedBookings(
+    exists ? cached.map((item) => (item.id === booking.id ? booking : item)) : [booking, ...cached],
+  );
+}
+
+function removeCachedBooking(id: string) {
+  const cached = getCachedBookings();
+  if (!cached) return;
+  setCachedBookings(cached.filter((item) => item.id !== id));
 }
 
 export async function getTelegramChats() {
@@ -156,49 +167,14 @@ function client() {
 
 function normalizeStatus(value: string): BookingRequest["status"] {
   return ["new", "in_progress", "confirmed", "cancelled", "deleted"].includes(value)
-    ? value as BookingRequest["status"]
+    ? (value as BookingRequest["status"])
     : "new";
 }
 
 function normalizePaymentStatus(value: string): BookingRequest["paymentStatus"] {
   return ["unpaid", "deposit", "paid"].includes(value)
-    ? value as BookingRequest["paymentStatus"]
+    ? (value as BookingRequest["paymentStatus"])
     : "unpaid";
-}
-
-function parsePayments(value: string): PaymentRecord[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function enrichRequest(request: BookingRequest): BookingRequest {
-  const listPrice = request.listPrice || request.price;
-  const salePrice = request.salePrice || request.price;
-  const payments = request.payments || [];
-  const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
-  const prepayment = request.prepayment || totalPaid;
-  const balance = Math.max(0, salePrice - prepayment);
-  let paymentStatus: BookingRequest["paymentStatus"] = "unpaid";
-  if (prepayment >= salePrice && salePrice > 0) paymentStatus = "paid";
-  else if (prepayment > 0) paymentStatus = "deposit";
-
-  return {
-    ...request,
-    price: salePrice,
-    listPrice,
-    salePrice,
-    prepayment,
-    balance,
-    paymentStatus,
-    payments,
-    comment: request.comment || "",
-    deletedAt: request.deletedAt || "",
-  };
 }
 
 function fromRow(row: string[]): BookingRequest {
@@ -207,17 +183,26 @@ function fromRow(row: string[]): BookingRequest {
   const oldPrice = Number(row[7]) || 0;
   const listPrice = hasFinanceColumns ? Number(row[7]) || oldPrice : oldPrice;
   const salePrice = hasFinanceColumns ? Number(row[8]) || listPrice : oldPrice;
+  const prepayment = Number(hasFinanceColumns ? row[16] : hasSourceColumns ? row[15] : row[13]) || 0;
+  const paymentMethod = hasFinanceColumns ? row[18] : hasSourceColumns ? row[16] : row[14];
+  const paymentRecipient = hasFinanceColumns ? row[19] : "";
+  const paidAt = hasFinanceColumns ? row[20] : "";
+  const paymentsRaw = hasFinanceColumns ? row[23] : "";
+  let payments: PaymentRecord[] = [];
+  if (paymentsRaw) {
+    try {
+      payments = JSON.parse(paymentsRaw) as PaymentRecord[];
+    } catch {
+      payments = [];
+    }
+  }
 
-  const payments: PaymentRecord[] = hasFinanceColumns && row[23] ? parsePayments(String(row[23])) : [];
-  const totalFromPayments = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
-  const prepayment = totalFromPayments > 0 ? totalFromPayments : (hasFinanceColumns ? Number(row[16]) || 0 : hasSourceColumns ? Number(row[15]) || 0 : Number(row[13]) || 0);
-
-  const result: BookingRequest = {
+  return enrichBooking({
     id: row[0],
     createdAt: row[1],
     date: row[2],
     time: row[3],
-    duration: Number(row[4]),
+    duration: Number(row[4]) || 60,
     format: row[5] as BookingRequest["format"],
     sector: row[6],
     price: salePrice,
@@ -229,19 +214,20 @@ function fromRow(row: string[]): BookingRequest {
     source: hasFinanceColumns ? row[12] || "Сайт" : hasSourceColumns ? row[11] || "Сайт" : "Сайт",
     sourceDetail: hasFinanceColumns ? row[13] || "" : hasSourceColumns ? row[12] || "" : "",
     status: normalizeStatus(hasFinanceColumns ? row[14] : hasSourceColumns ? row[13] : row[11]),
-    paymentStatus: "unpaid",
+    paymentStatus: normalizePaymentStatus(hasFinanceColumns ? row[15] : hasSourceColumns ? row[14] : row[12]),
     prepayment,
     balance: Math.max(0, salePrice - prepayment),
-    payments,
+    paymentMethod,
+    paymentRecipient,
+    paidAt,
     comment: hasFinanceColumns ? row[21] : hasSourceColumns ? row[17] : row[15],
     deletedAt: hasFinanceColumns ? row[22] : "",
-  };
-
-  return enrichRequest(result);
+    payments,
+  });
 }
 
 function toRow(request: BookingRequest) {
-  const enriched = enrichRequest(request);
+  const enriched = enrichBooking(request);
   return [
     enriched.id,
     enriched.createdAt,
@@ -261,12 +247,12 @@ function toRow(request: BookingRequest) {
     enriched.paymentStatus,
     enriched.prepayment,
     enriched.balance,
-    enriched.payments?.[0]?.method || "",
-    enriched.payments?.[0]?.recipient || "",
-    enriched.payments?.[0]?.date || "",
+    enriched.paymentMethod,
+    enriched.paymentRecipient,
+    enriched.paidAt,
     enriched.comment,
     enriched.deletedAt,
-    JSON.stringify(enriched.payments || []),
+    JSON.stringify(enriched.payments),
   ];
 }
 
@@ -283,7 +269,7 @@ function forAppsScript(request: BookingRequest): BookingRequest {
 function baseRequest(input: BookingInput): BookingRequest {
   const listPrice = input.listPrice || input.price;
   const salePrice = input.salePrice || input.price;
-  return {
+  return enrichBooking({
     ...input,
     id: `REQ-${Date.now().toString().slice(-6)}`,
     createdAt: new Date().toISOString(),
@@ -296,10 +282,13 @@ function baseRequest(input: BookingInput): BookingRequest {
     paymentStatus: "unpaid",
     prepayment: 0,
     balance: salePrice,
-    payments: [],
+    paymentMethod: "Не выбран",
+    paymentRecipient: "",
+    paidAt: "",
     comment: "",
     deletedAt: "",
-  };
+    payments: [],
+  });
 }
 
 export async function getRequests(options: { fresh?: boolean } = {}): Promise<BookingRequest[]> {
@@ -309,11 +298,11 @@ export async function getRequests(options: { fresh?: boolean } = {}): Promise<Bo
       if (cached) return cached;
     }
     const result = await appsScriptRequest<{ bookings: BookingRequest[] }>("list");
-    const bookings = result.bookings.map(enrichRequest);
+    const bookings = result.bookings.map(enrichBooking);
     setCachedBookings(bookings);
     return bookings;
   }
-  if (!isConfigured()) return mockRequests.map(enrichRequest);
+  if (!isConfigured()) return mockRequests.map(enrichBooking);
   const sheets = client();
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SHEET_ID,
@@ -322,16 +311,9 @@ export async function getRequests(options: { fresh?: boolean } = {}): Promise<Bo
   return (response.data.values || []).map((row) => fromRow(row as string[]));
 }
 
-export async function searchRequests(query: string): Promise<BookingRequest[]> {
-  const all = await getRequests();
-  const q = query.toLowerCase().trim();
-  if (!q) return all;
-  return all.filter((item) =>
-    [item.name, item.phone, item.team, item.source, item.sourceDetail, item.id]
-      .join(" ")
-      .toLowerCase()
-      .includes(q)
-  );
+function ensureNoConflict(existing: BookingRequest[], booking: BookingRequest) {
+  const conflict = findBookingConflict(existing, booking);
+  if (conflict) throw new BookingConflictError(conflictMessage(conflict));
 }
 
 export async function createRequest(input: BookingInput): Promise<BookingRequest> {
@@ -352,77 +334,20 @@ export async function createRequest(input: BookingInput): Promise<BookingRequest
   return request;
 }
 
-export async function batchCreateRequests(inputs: BookingInput[]): Promise<{ created: BookingRequest[]; conflicts: Array<{ date: string; time: string; inputIndex: number }> }> {
-  const existing = await getRequests({ fresh: true });
-  const created: BookingRequest[] = [];
-  const conflicts: Array<{ date: string; time: string; inputIndex: number }> = [];
-
-  for (let i = 0; i < inputs.length; i++) {
-    const input = inputs[i];
-    const allBookings = [...existing, ...created];
-    const conflict = findConflict(allBookings, input);
-    if (conflict) {
-      conflicts.push({ date: input.date, time: input.time, inputIndex: i });
-      continue;
-    }
-    const request = baseRequest(input);
-    if (isAppsScriptConfigured()) {
-      await appsScriptRequest("create", { booking: forAppsScript(request) });
-    } else if (isConfigured()) {
-      const sheets = client();
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: process.env.GOOGLE_SHEET_ID,
-        range: "Брони!A:X",
-        valueInputOption: "USER_ENTERED",
-        requestBody: { values: [toRow(request)] },
-      });
-    }
-    upsertCachedBooking(request);
-    created.push(request);
-  }
-
-  return { created, conflicts };
-}
-
-function findConflict(existing: BookingRequest[], input: BookingInput): { date: string; time: string; id: string } | null {
-  const requestedSectors = input.sector.split("+");
-  const requestedSlots = bookingSlots(input.time, input.duration || 60);
-  for (const item of existing) {
-    if (item.date !== input.date) continue;
-    if (["cancelled", "deleted"].includes(item.status)) continue;
-    const itemSlots = bookingSlots(item.time, item.duration);
-    const sectors = item.sector.split("+");
-    const hasOverlap = itemSlots.some((slot) => requestedSlots.includes(slot)) &&
-      sectors.some((sector) => requestedSectors.includes(sector));
-    if (hasOverlap) return { date: item.date, time: item.time, id: item.id };
-  }
-  return null;
-}
-
-function hasConflict(existing: BookingRequest[], input: BookingInput) {
-  return findConflict(existing, input) !== null;
-}
-
 export async function createRequestIfAvailable(input: BookingInput): Promise<BookingRequest> {
   const request = baseRequest(input);
 
   if (isAppsScriptConfigured()) {
-    try {
-      const result = await appsScriptRequest<{ booking: BookingRequest; conflict?: boolean }>(
-        "createIfAvailable",
-        { booking: forAppsScript(request) },
-      );
-      if (result.conflict) throw new BookingConflictError();
-      upsertCachedBooking(request);
-      return request;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      if (!message.includes("Неизвестное действие")) throw error;
-    }
+    const result = await appsScriptRequest<{ booking: BookingRequest }>("createIfAvailable", {
+      booking: forAppsScript(request),
+    });
+    const booking = enrichBooking(result.booking);
+    upsertCachedBooking(booking);
+    return booking;
   }
 
   const existing = await getRequests();
-  if (hasConflict(existing, input)) throw new BookingConflictError();
+  ensureNoConflict(existing, request);
   return createRequest(input);
 }
 
@@ -433,10 +358,9 @@ export async function updateRequest(
   if (isAppsScriptConfigured()) {
     const result = await appsScriptRequest<{ booking: BookingRequest }>("update", {
       id,
-      patch: { ...patch, payments: undefined },
+      patch,
     });
-    const booking = enrichRequest(result.booking);
-    if (patch.payments) booking.payments = patch.payments;
+    const booking = enrichBooking(result.booking);
     upsertCachedBooking(booking);
     return booking;
   }
@@ -444,7 +368,10 @@ export async function updateRequest(
   const requests = await getRequests();
   const index = requests.findIndex((item) => item.id === id);
   if (index === -1) return null;
-  const updated = enrichRequest({ ...requests[index], ...patch, id });
+
+  const updated = enrichBooking({ ...requests[index], ...patch, id });
+  ensureNoConflict(requests, updated);
+
   if (!isConfigured()) return updated;
   const sheets = client();
   await sheets.spreadsheets.values.update({
@@ -453,45 +380,46 @@ export async function updateRequest(
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [toRow(updated)] },
   });
+  upsertCachedBooking(updated);
   return updated;
 }
 
-export async function addPayment(
-  bookingId: string,
-  payment: Omit<PaymentRecord, "id" | "createdAt">,
-): Promise<BookingRequest | null> {
-  const booking = (await getRequests()).find((b) => b.id === bookingId);
-  if (!booking) return null;
+export async function deleteRequest(id: string): Promise<boolean> {
+  if (isAppsScriptConfigured()) {
+    await appsScriptRequest("delete", { id });
+    removeCachedBooking(id);
+    return true;
+  }
 
-  const newPayment: PaymentRecord = {
-    ...payment,
-    id: `PAY-${Date.now().toString().slice(-6)}`,
-    createdAt: new Date().toISOString(),
-  };
+  const requests = await getRequests();
+  const index = requests.findIndex((item) => item.id === id);
+  if (index === -1) return false;
+  if (!isConfigured()) {
+    removeCachedBooking(id);
+    return true;
+  }
 
-  const payments = [...(booking.payments || []), newPayment];
-  const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
-
-  return updateRequest(bookingId, {
-    payments,
-    prepayment: totalPaid,
+  const sheets = client();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEET_ID! });
+  const sheetId = meta.data.sheets?.find((sheet) => sheet.properties?.title === "Брони")?.properties?.sheetId;
+  if (sheetId == null) return false;
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: process.env.GOOGLE_SHEET_ID!,
+    requestBody: {
+      requests: [{
+        deleteDimension: {
+          range: {
+            sheetId,
+            dimension: "ROWS",
+            startIndex: index + 1,
+            endIndex: index + 2,
+          },
+        },
+      }],
+    },
   });
-}
-
-export async function deletePayment(
-  bookingId: string,
-  paymentId: string,
-): Promise<BookingRequest | null> {
-  const booking = (await getRequests()).find((b) => b.id === bookingId);
-  if (!booking) return null;
-
-  const payments = (booking.payments || []).filter((p) => p.id !== paymentId);
-  const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
-
-  return updateRequest(bookingId, {
-    payments,
-    prepayment: totalPaid,
-  });
+  removeCachedBooking(id);
+  return true;
 }
 
 export async function ensureSheet() {

@@ -25,9 +25,10 @@ const HEADERS = [
   "Дата оплаты",
   "Комментарий",
   "Удалено",
-  "Платежи",
+  "История оплат JSON",
 ];
 const STATUSES = ["new", "in_progress", "confirmed", "cancelled", "deleted"];
+const QUARTERS = ["A", "B", "C", "D"];
 
 function doGet(event) {
   try {
@@ -51,31 +52,19 @@ function doPost(event) {
 
     if (body.action === "createIfAvailable") {
       const booking = enrichBooking_(body.booking);
-      if (hasConflict_(booking)) {
-        return json_({ ok: true, conflict: true });
-      }
+      ensureNoConflict_(booking);
       appendBooking_(booking);
-      return json_({ ok: true, booking, conflict: false });
-    }
-
-    if (body.action === "batchCreate") {
-      const results = [];
-      const inputs = body.bookings || [];
-      for (let i = 0; i < inputs.length; i++) {
-        var booking = enrichBooking_(inputs[i]);
-        if (hasConflict_(booking)) {
-          results.push({ index: i, conflict: true });
-        } else {
-          appendBooking_(booking);
-          results.push({ index: i, conflict: false, booking: booking });
-        }
-      }
-      return json_({ ok: true, results: results });
+      return json_({ ok: true, booking });
     }
 
     if (body.action === "update") {
       const booking = updateBooking_(body.id, body.patch);
       return json_({ ok: true, booking });
+    }
+
+    if (body.action === "delete") {
+      deleteBooking_(body.id);
+      return json_({ ok: true });
     }
 
     if (body.action === "registerTelegramChat") {
@@ -104,9 +93,7 @@ function doPost(event) {
 
 function authorize_(secret) {
   const expected = PropertiesService.getScriptProperties().getProperty("API_SECRET");
-  if (!expected || secret !== expected) {
-    throw new Error("Нет доступа");
-  }
+  if (!expected || secret !== expected) throw new Error("Нет доступа");
 }
 
 function getSpreadsheet_() {
@@ -148,29 +135,62 @@ function updateBooking_(id, patch) {
   const index = rows.findIndex((row) => text_(row[0]).replace(/^'/, "") === String(id));
   if (index === -1) throw new Error("Бронь не найдена");
 
-  const updated = enrichBooking_(Object.assign(fromRow_(rows[index]), patch, { id }));
+  const bookings = rows.map(fromRow_);
+  const updated = enrichBooking_(Object.assign({}, bookings[index], patch, { id }));
+  ensureNoConflict_(updated, id, bookings);
   sheet.getRange(index + 2, 1, 1, HEADERS.length).setValues([toRow_(updated)]);
   return updated;
 }
 
-function hasConflict_(booking) {
+function deleteBooking_(id) {
   const sheet = getSheet_();
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return false;
+  if (lastRow < 2) throw new Error("Бронь не найдена");
 
-  const requestedSectors = text_(booking.sector).split("+");
-  const requestedSlots = bookingSlots_(booking.time, Number(booking.duration) || 60);
   const rows = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+  const index = rows.findIndex((row) => text_(row[0]).replace(/^'/, "") === String(id));
+  if (index === -1) throw new Error("Бронь не найдена");
+  sheet.deleteRow(index + 2);
+}
 
-  return rows.map(fromRow_).some((item) => {
-    if (item.date !== text_(booking.date).replace(/^'/, "")) return false;
-    if (item.status === "cancelled" || item.status === "deleted") return false;
+function ensureNoConflict_(booking, ignoredId, sourceBookings) {
+  const bookings = sourceBookings || readBookings_();
+  const conflict = bookings.find((item) => hasConflict_(item, booking, ignoredId));
+  if (conflict) throw new Error(conflictMessage_(conflict));
+}
 
-    const itemSlots = bookingSlots_(item.time, item.duration);
-    const sectors = item.sector.split("+");
-    return itemSlots.some((slot) => requestedSlots.indexOf(slot) !== -1) &&
-      sectors.some((sector) => requestedSectors.indexOf(sector) !== -1);
-  });
+function hasConflict_(existing, booking, ignoredId) {
+  if (existing.id === ignoredId || existing.id === booking.id) return false;
+  if (existing.date !== text_(booking.date).replace(/^'/, "")) return false;
+  if (existing.status === "cancelled" || existing.status === "deleted") return false;
+
+  const existingSlots = bookingSlots_(existing.time, existing.duration);
+  const candidateSlots = bookingSlots_(booking.time, booking.duration);
+  const intersectsByTime = existingSlots.some((slot) => candidateSlots.indexOf(slot) !== -1);
+  if (!intersectsByTime) return false;
+
+  const existingParts = occupiedParts_(existing.format, existing.sector);
+  const candidateParts = occupiedParts_(booking.format, booking.sector);
+  return existingParts.some((part) => candidateParts.indexOf(part) !== -1);
+}
+
+function occupiedParts_(format, sector) {
+  const parts = text_(sector)
+    .split("+")
+    .map((part) => part.trim().toUpperCase())
+    .filter((part) => QUARTERS.indexOf(part) !== -1);
+
+  if (text_(format) === "full") return QUARTERS.slice();
+  if (parts.length > 0) return Array.from(new Set(parts));
+  return text_(format) === "half" ? ["A", "B"] : ["A"];
+}
+
+function conflictMessage_(booking) {
+  return "Конфликт с бронью " +
+    booking.time + "-" + bookingEndTime_(booking.time, booking.duration) +
+    " · " + booking.name +
+    " · " + formatLabel_(booking.format) +
+    " · " + booking.sector;
 }
 
 function bookingSlots_(time, duration) {
@@ -188,6 +208,20 @@ function bookingSlots_(time, duration) {
     slots.push(hour + ":" + minute);
   }
   return slots;
+}
+
+function bookingEndTime_(time, duration) {
+  const parts = text_(time).replace(/^'/, "").split(":");
+  const start = Number(parts[0]) * 60 + Number(parts[1] || 0);
+  const endMinutes = (start + (Number(duration) || 60)) % 1440;
+  const normalized = (endMinutes + 1440) % 1440;
+  return String(Math.floor(normalized / 60)).padStart(2, "0") + ":" + String(normalized % 60).padStart(2, "0");
+}
+
+function formatLabel_(format) {
+  if (text_(format) === "quarter") return "1/4 поля";
+  if (text_(format) === "half") return "1/2 поля";
+  return "Поле целиком";
 }
 
 function getSettingsSheet_() {
@@ -267,16 +301,12 @@ function readTelegramChats_() {
   const sheet = getTelegramSheet_();
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
-  return sheet
-    .getRange(2, 1, lastRow - 1, 4)
-    .getValues()
-    .map((row) => ({
-      chatId: text_(row[0]).replace(/^'/, ""),
-      name: text_(row[1]),
-      username: text_(row[2]),
-      activatedAt: text_(row[3]).replace(/^'/, ""),
-    }))
-    .filter((chat) => chat.chatId);
+  return sheet.getRange(2, 1, lastRow - 1, 4).getValues().map((row) => ({
+    chatId: text_(row[0]).replace(/^'/, ""),
+    name: text_(row[1]),
+    username: text_(row[2]),
+    activatedAt: text_(row[3]).replace(/^'/, ""),
+  })).filter((chat) => chat.chatId);
 }
 
 function registerTelegramChat_(chat) {
@@ -286,12 +316,7 @@ function registerTelegramChat_(chat) {
 
   const rows = readTelegramChats_();
   const existingIndex = rows.findIndex((row) => row.chatId === chatId);
-  const row = [
-    "'" + chatId,
-    chat.name || "",
-    chat.username || "",
-    "'" + new Date().toISOString(),
-  ];
+  const row = ["'" + chatId, chat.name || "", chat.username || "", "'" + new Date().toISOString()];
 
   if (existingIndex === -1) {
     sheet.appendRow(row);
@@ -306,15 +331,12 @@ function fromRow_(row) {
   const oldPrice = Number(row[7]) || 0;
   const listPrice = hasFinanceColumns ? Number(row[7]) || oldPrice : oldPrice;
   const salePrice = hasFinanceColumns ? Number(row[8]) || listPrice : oldPrice;
-  
-  let payments = [];
-  try {
-    const paymentsStr = hasFinanceColumns && row[23] ? text_(row[23]) : "";
-    if (paymentsStr) payments = JSON.parse(paymentsStr);
-  } catch (e) {}
-  
-  const totalFromPayments = payments.reduce(function(sum, p) { return sum + (p.amount || 0); }, 0);
-  const prepayment = totalFromPayments > 0 ? totalFromPayments : Number(hasFinanceColumns ? row[16] : hasSourceColumns ? row[15] : row[13]) || 0;
+  const prepayment = Number(hasFinanceColumns ? row[16] : hasSourceColumns ? row[15] : row[13]) || 0;
+  const paymentMethod = hasFinanceColumns ? text_(row[18]) : hasSourceColumns ? text_(row[16]) : text_(row[14]);
+  const paymentRecipient = hasFinanceColumns ? text_(row[19]) : "";
+  const paidAt = hasFinanceColumns ? text_(row[20]) : "";
+  const paymentsRaw = hasFinanceColumns ? text_(row[23]) : "";
+  const payments = paymentsRaw ? JSON.parse(paymentsRaw) : [];
 
   return enrichBooking_({
     id: text_(row[0]).replace(/^'/, ""),
@@ -336,15 +358,17 @@ function fromRow_(row) {
     paymentStatus: normalizePaymentStatus_(hasFinanceColumns ? text_(row[15]) : hasSourceColumns ? text_(row[14]) : text_(row[12])),
     prepayment,
     balance: Math.max(0, salePrice - prepayment),
-    payments: payments,
+    paymentMethod,
+    paymentRecipient,
+    paidAt,
     comment: hasFinanceColumns ? text_(row[21]) : hasSourceColumns ? text_(row[17]) : text_(row[15]),
     deletedAt: hasFinanceColumns ? text_(row[22]) : "",
+    payments,
   });
 }
 
 function toRow_(booking) {
   const item = enrichBooking_(booking);
-  const payments = booking.payments || [];
   return [
     item.id,
     item.createdAt,
@@ -364,19 +388,65 @@ function toRow_(booking) {
     item.paymentStatus,
     item.prepayment,
     item.balance,
-    "",
-    "",
-    "",
+    item.paymentMethod,
+    item.paymentRecipient,
+    item.paidAt,
     item.comment,
     item.deletedAt,
-    JSON.stringify(payments),
+    JSON.stringify(item.payments || []),
   ];
+}
+
+function normalizePayments_(payments, fallbackAmount, fallbackDate, fallbackMethod, fallbackRecipient) {
+  const list = Array.isArray(payments) ? payments : [];
+  const normalized = list.map((payment, index) => {
+    const amount = Number(payment.amount) || 0;
+    if (amount <= 0) return null;
+    return {
+      id: String(payment.id || "PAY-" + (index + 1) + "-" + new Date().getTime()),
+      amount,
+      date: text_(payment.date || fallbackDate || "").slice(0, 10),
+      method: text_(payment.method || fallbackMethod || "Не выбран"),
+      recipient: text_(payment.recipient || fallbackRecipient || "Не выбран"),
+    };
+  }).filter(Boolean);
+
+  if (normalized.length > 0) return normalized;
+  if ((Number(fallbackAmount) || 0) <= 0) return [];
+
+  return [{
+    id: "PAY-LEGACY-" + new Date().getTime(),
+    amount: Number(fallbackAmount) || 0,
+    date: text_(fallbackDate || "").slice(0, 10),
+    method: text_(fallbackMethod || "Не выбран"),
+    recipient: text_(fallbackRecipient || "Не выбран"),
+  }];
+}
+
+function totalPaid_(payments) {
+  return payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+}
+
+function paymentStatusFor_(price, paid) {
+  if (paid <= 0) return "unpaid";
+  if (paid >= price) return "paid";
+  return "deposit";
 }
 
 function enrichBooking_(booking) {
   const listPrice = Number(booking.listPrice || booking.price) || 0;
   const salePrice = Number(booking.salePrice || booking.price || listPrice) || 0;
-  const prepayment = Number(booking.prepayment) || 0;
+  const payments = normalizePayments_(
+    booking.payments,
+    booking.prepayment,
+    booking.paidAt,
+    booking.paymentMethod,
+    booking.paymentRecipient
+  );
+  const prepayment = totalPaid_(payments);
+  const balance = Math.max(0, salePrice - prepayment);
+  const latestPayment = payments.length ? payments[payments.length - 1] : null;
+
   return Object.assign({}, booking, {
     price: salePrice,
     listPrice,
@@ -384,12 +454,15 @@ function enrichBooking_(booking) {
     source: booking.source || "Сайт",
     sourceDetail: booking.sourceDetail || "",
     status: normalizeStatus_(booking.status),
-    paymentStatus: normalizePaymentStatus_(booking.paymentStatus),
+    paymentStatus: paymentStatusFor_(salePrice, prepayment),
     prepayment,
-    balance: Math.max(0, salePrice - prepayment),
-    payments: booking.payments || [],
+    balance,
+    paymentMethod: latestPayment ? latestPayment.method : booking.paymentMethod || "Не выбран",
+    paymentRecipient: latestPayment ? latestPayment.recipient : booking.paymentRecipient || "",
+    paidAt: latestPayment ? latestPayment.date : text_(booking.paidAt || "").replace(/^'/, ""),
     comment: booking.comment || "",
     deletedAt: text_(booking.deletedAt || "").replace(/^'/, ""),
+    payments,
   });
 }
 
@@ -404,17 +477,11 @@ function normalizePaymentStatus_(value) {
 
 function text_(value) {
   if (value instanceof Date) {
-    return Utilities.formatDate(
-      value,
-      Session.getScriptTimeZone(),
-      "yyyy-MM-dd HH:mm:ss"
-    );
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
   }
   return String(value == null ? "" : value);
 }
 
 function json_(value) {
-  return ContentService
-    .createTextOutput(JSON.stringify(value))
-    .setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
 }

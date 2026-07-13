@@ -8,7 +8,6 @@ export type PaymentRecord = {
   date: string;
   method: string;
   recipient: string;
-  createdAt: string;
 };
 
 export type BookingRequest = {
@@ -31,12 +30,26 @@ export type BookingRequest = {
   paymentStatus: PaymentStatus;
   prepayment: number;
   balance: number;
-  payments: PaymentRecord[];
+  paymentMethod: string;
+  paymentRecipient: string;
+  paidAt: string;
   comment: string;
   deletedAt: string;
+  payments: PaymentRecord[];
 };
 
 export type BookingInput = Omit<
   BookingRequest,
-  "id" | "createdAt" | "status" | "paymentStatus" | "prepayment" | "balance" | "payments" | "comment" | "deletedAt"
+  | "id"
+  | "createdAt"
+  | "status"
+  | "paymentStatus"
+  | "prepayment"
+  | "balance"
+  | "paymentMethod"
+  | "paymentRecipient"
+  | "paidAt"
+  | "comment"
+  | "deletedAt"
+  | "payments"
 >;

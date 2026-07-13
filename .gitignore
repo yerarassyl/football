@@ -4,12 +4,5 @@ node_modules
 .env.local
 *.log
 .vercel
-tsconfig.tsbuildinfo
-*.mp4
-*.MP4
 
-# Large media files in root
-/*.jpg
-/*.jpeg
-/*.png
-/*.gif
+.vercel

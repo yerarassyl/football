@@ -47,38 +47,13 @@ export const SECTORS: Record<FieldFormat, Array<{ id: string; label: string }>> 
     { id: "D", label: "Сектор D" },
   ],
   half: [
+    { id: "A+B", label: "Половина A + B" },
+    { id: "C+D", label: "Половина C + D" },
     { id: "A+C", label: "Половина A + C" },
     { id: "B+D", label: "Половина B + D" },
   ],
   full: [{ id: "A+B+C+D", label: "Полное поле" }],
 };
 
-export const PAYMENT_METHODS = [
-  "Не выбран",
-  "Наличные",
-  "Kaspi QR",
-  "Kaspi Терминал",
-  "Счет на оплату",
-  "Банковский перевод",
-  "Контрактный клиент",
-  "Другое",
-];
-
-export const PAYMENT_RECIPIENTS = [
-  "Не выбран",
-  "ТОО AIR ARENA",
-  "ИП AIR ARENA",
-  "ТОО WMA GROUP",
-  "Другое",
-];
-
-export const WEEKDAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
-export const WEEKDAY_FULL_NAMES = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
-
 export const formatPrice = (value: number) =>
   new Intl.NumberFormat("ru-RU").format(value) + " ₸";
-
-export const formatShortDate = (iso: string) => {
-  const parts = iso.split("-");
-  return `${parts[2]}.${parts[1]}`;
-};
