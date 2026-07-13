@@ -1989,18 +1989,33 @@ a {
 }
 
 .analytics-row-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 14px;
+  align-items: center;
   width: 100%;
   color: inherit;
   text-align: left;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
   border-top: 0;
   border-right: 0;
   border-bottom: 1px solid var(--line);
   border-left: 0;
+  border-radius: 0;
+  box-shadow: none;
+  outline: 0;
   background: transparent;
 }
 
 .analytics-row-button:hover {
   background: #f8faf8;
+}
+
+.analytics-row-button:focus-visible {
+  outline: 2px solid rgba(23, 107, 69, 0.22);
+  outline-offset: -2px;
 }
 
 .analytics-row strong,
@@ -2509,6 +2524,14 @@ a {
   overflow: hidden;
 }
 
+.repeat-actions {
+  padding: 0 0 20px;
+}
+
+.repeat-actions .primary-button {
+  max-width: 280px;
+}
+
 @media (max-width: 900px) {
   .booking-grid {
     grid-template-columns: 1fr;
@@ -2888,12 +2911,14 @@ a {
   }
 
   .payment-form-submit,
-  .settings-actions {
+  .settings-actions,
+  .repeat-actions {
     width: 100%;
   }
 
   .payment-form-submit .secondary-button,
-  .settings-actions .primary-button {
+  .settings-actions .primary-button,
+  .repeat-actions .primary-button {
     width: 100%;
   }
 

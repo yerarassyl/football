@@ -125,7 +125,22 @@ function bookingSort(a: BookingRequest, b: BookingRequest) {
 function matchQuery(item: BookingRequest, query: string) {
   const value = query.trim().toLowerCase();
   if (!value) return true;
-  return [item.name, item.phone, item.team, item.comment, item.source, item.sourceDetail]
+  return [
+    item.id,
+    item.date,
+    item.time,
+    item.name,
+    item.phone,
+    item.team,
+    item.comment,
+    item.source,
+    item.sourceDetail,
+    item.paymentMethod,
+    item.paymentRecipient,
+    item.sector,
+    item.status,
+    formatLabel(item.format),
+  ]
     .join(" ")
     .toLowerCase()
     .includes(value);
@@ -436,6 +451,21 @@ export default function AdminDashboard() {
     openStatusTab(fallbackStatus, booking.id);
   }
 
+  function openFilteredBookings(nextTab: Tab, nextQuery: string) {
+    setCreateMode(false);
+    setSelectedId("");
+    setQuery(nextQuery);
+    setTab(nextTab);
+  }
+
+  function openScheduleDate(date: string) {
+    setCreateMode(false);
+    setSelectedId("");
+    setQuery("");
+    setSelectedDate(date);
+    setTab("schedule");
+  }
+
   return (
     <div className="admin-layout">
       <aside className="admin-sidebar">
@@ -715,6 +745,8 @@ export default function AdminDashboard() {
             bookings={bookings}
             onOpenBooking={openBookingDetails}
             onOpenStatus={openStatusTab}
+            onOpenFilter={openFilteredBookings}
+            onOpenDate={openScheduleDate}
           />
         )}
         {tab === "settings" && <PriceSettings fieldOptions={fieldOptions} onChange={setFieldOptions} />}
@@ -1100,9 +1132,11 @@ function RepeatPlanner({
           </div>
         )}
         {result && <div className={`admin-booking-message ${result.includes("Создано") ? "success" : ""}`}>{result}</div>}
-        <button className="primary-button" disabled={working} type="submit">
-          <CopyPlus size={16} /> {working ? "Копируем..." : "Повторить расписание"}
-        </button>
+        <div className="repeat-actions">
+          <button className="primary-button" disabled={working} type="submit">
+            <CopyPlus size={16} /> {working ? "Копируем..." : "Повторить расписание"}
+          </button>
+        </div>
       </form>
     </>
   );
@@ -1187,10 +1221,14 @@ function AnalyticsDashboard({
   bookings,
   onOpenBooking,
   onOpenStatus,
+  onOpenFilter,
+  onOpenDate,
 }: {
   bookings: BookingRequest[];
   onOpenBooking: (bookingId: string, fallbackStatus?: QueueStatus) => void;
   onOpenStatus: (status: QueueStatus, bookingId?: string) => void;
+  onOpenFilter: (nextTab: Tab, nextQuery: string) => void;
+  onOpenDate: (date: string) => void;
 }) {
   const today = localDateValue();
   const [view, setView] = useState<AnalyticsView>("overview");
@@ -1289,6 +1327,7 @@ function AnalyticsDashboard({
       label: client.name,
       value: formatPrice(client.revenue),
       meta: `${client.bookings} броней · ${client.phone}`,
+      onClick: () => onOpenFilter("status:confirmed", client.name),
     }));
 
   const sourceStats = Array.from(activeBooked.reduce<Map<string, {
@@ -1312,6 +1351,7 @@ function AnalyticsDashboard({
     label: source.label,
     value: formatPrice(source.revenue),
     meta: `${source.bookings} броней · конверсия ${percentage(source.bookings ? (source.confirmed / source.bookings) * 100 : 0)} · ${source.clients.size} клиентов`,
+    onClick: () => onOpenFilter("status:confirmed", source.label),
   }));
 
   const financeRows: AnalyticsRow[] = Array.from(confirmed.reduce<Map<string, { revenue: number; paid: number; debt: number; bookings: number }>>((map, item) => {
@@ -1330,13 +1370,19 @@ function AnalyticsDashboard({
       label: date,
       value: formatPrice(item.revenue),
       meta: `${item.bookings} броней · оплачено ${formatPrice(item.paid)} · долг ${formatPrice(item.debt)}`,
+      onClick: () => onOpenDate(date),
     }));
 
-  const recipientRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => item.paymentRecipient || "Не указан", (item) => Number(item.prepayment) || 0, true);
-  const methodRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => item.paymentMethod || "Не выбран", (item) => Number(item.prepayment) || 0, true);
-  const formatRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => formatLabel(item.format), (item) => Number(item.salePrice || item.price) || 0, true);
-  const sectorRows: AnalyticsRow[] = aggregateRows(activeBooked, (item) => item.sector, (item) => item.duration / 60, false, "ч.");
-  const timeRows: AnalyticsRow[] = aggregateRows(activeBooked, (item) => item.time, (item) => item.duration / 60, false, "ч.");
+  const recipientRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => item.paymentRecipient || "Не указан", (item) => Number(item.prepayment) || 0, true)
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("status:confirmed", row.label) }));
+  const methodRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => item.paymentMethod || "Не выбран", (item) => Number(item.prepayment) || 0, true)
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("status:confirmed", row.label) }));
+  const formatRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => formatLabel(item.format), (item) => Number(item.salePrice || item.price) || 0, true)
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("status:confirmed", row.label) }));
+  const sectorRows: AnalyticsRow[] = aggregateRows(activeBooked, (item) => item.sector, (item) => item.duration / 60, false, "ч.")
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("schedule", row.label) }));
+  const timeRows: AnalyticsRow[] = aggregateRows(activeBooked, (item) => item.time, (item) => item.duration / 60, false, "ч.")
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("schedule", row.label) }));
 
   const funnelCreated = byCreatedDate.length;
   const funnelConfirmed = byCreatedDate.filter((item) => item.status === "confirmed").length;
@@ -1689,20 +1735,36 @@ function AnalyticsListCard({ title, rows }: { title: string; rows: AnalyticsRow[
         <span>{rows.length} строк</span>
       </div>
       {rows.length === 0 && <div className="empty-state">Данных пока нет</div>}
-      {rows.map((row) => (
-        <button
-          className={`analytics-row analytics-row-${row.tone || "neutral"} ${row.onClick ? "analytics-row-button" : ""}`}
-          key={`${title}-${row.label}-${row.value}`}
-          onClick={row.onClick}
-          type="button"
-        >
-          <div>
-            <strong>{row.label}</strong>
-            {row.meta && <small>{row.meta}</small>}
-          </div>
-          <span>{row.value}</span>
-        </button>
-      ))}
+      {rows.map((row) => {
+        const content = (
+          <>
+            <div>
+              <strong>{row.label}</strong>
+              {row.meta && <small>{row.meta}</small>}
+            </div>
+            <span>{row.value}</span>
+          </>
+        );
+
+        if (!row.onClick) {
+          return (
+            <div className={`analytics-row analytics-row-${row.tone || "neutral"}`} key={`${title}-${row.label}-${row.value}`}>
+              {content}
+            </div>
+          );
+        }
+
+        return (
+          <button
+            className={`analytics-row analytics-row-${row.tone || "neutral"} analytics-row-button`}
+            key={`${title}-${row.label}-${row.value}`}
+            onClick={row.onClick}
+            type="button"
+          >
+            {content}
+          </button>
+        );
+      })}
     </section>
   );
 }
