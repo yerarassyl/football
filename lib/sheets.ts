@@ -28,6 +28,9 @@ const HEADERS = [
   "Комментарий",
   "Удалено",
   "История оплат JSON",
+  "Обновлено",
+  "Подтверждено",
+  "Отменено",
 ];
 
 const BOOKINGS_CACHE_TTL = 15_000;
@@ -200,6 +203,9 @@ function fromRow(row: string[]): BookingRequest {
   return enrichBooking({
     id: row[0],
     createdAt: row[1],
+    updatedAt: row[24] || row[1],
+    confirmedAt: row[25] || "",
+    cancelledAt: row[26] || "",
     date: row[2],
     time: row[3],
     duration: Number(row[4]) || 60,
@@ -253,6 +259,9 @@ function toRow(request: BookingRequest) {
     enriched.comment,
     enriched.deletedAt,
     JSON.stringify(enriched.payments),
+    enriched.updatedAt,
+    enriched.confirmedAt,
+    enriched.cancelledAt,
   ];
 }
 
@@ -269,10 +278,14 @@ function forAppsScript(request: BookingRequest): BookingRequest {
 function baseRequest(input: BookingInput): BookingRequest {
   const listPrice = input.listPrice || input.price;
   const salePrice = input.salePrice || input.price;
+  const now = new Date().toISOString();
   return enrichBooking({
     ...input,
     id: `REQ-${Date.now().toString().slice(-6)}`,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    updatedAt: now,
+    confirmedAt: "",
+    cancelledAt: "",
     price: salePrice,
     listPrice,
     salePrice,
@@ -306,9 +319,29 @@ export async function getRequests(options: { fresh?: boolean } = {}): Promise<Bo
   const sheets = client();
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SHEET_ID,
-    range: "Брони!A2:X",
+    range: "Брони!A2:AA",
   });
   return (response.data.values || []).map((row) => fromRow(row as string[]));
+}
+
+function applyLifecyclePatch(current: BookingRequest, patch: Partial<BookingRequest>) {
+  const nextStatus = patch.status ?? current.status;
+  const now = new Date().toISOString();
+  const nextCancelledAt =
+    nextStatus === "cancelled"
+      ? patch.cancelledAt || current.cancelledAt || now
+      : patch.status && patch.status !== current.status
+        ? ""
+        : patch.cancelledAt ?? current.cancelledAt;
+  return {
+    ...patch,
+    updatedAt: patch.updatedAt || now,
+    confirmedAt:
+      nextStatus === "confirmed"
+        ? patch.confirmedAt || current.confirmedAt || now
+        : patch.confirmedAt ?? current.confirmedAt,
+    cancelledAt: nextCancelledAt,
+  };
 }
 
 function ensureNoConflict(existing: BookingRequest[], booking: BookingRequest) {
@@ -327,7 +360,7 @@ export async function createRequest(input: BookingInput): Promise<BookingRequest
   const sheets = client();
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.GOOGLE_SHEET_ID,
-    range: "Брони!A:X",
+    range: "Брони!A:AA",
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [toRow(request)] },
   });
@@ -369,14 +402,15 @@ export async function updateRequest(
   const index = requests.findIndex((item) => item.id === id);
   if (index === -1) return null;
 
-  const updated = enrichBooking({ ...requests[index], ...patch, id });
+  const lifecyclePatch = applyLifecyclePatch(requests[index], patch);
+  const updated = enrichBooking({ ...requests[index], ...lifecyclePatch, id });
   ensureNoConflict(requests, updated);
 
   if (!isConfigured()) return updated;
   const sheets = client();
   await sheets.spreadsheets.values.update({
     spreadsheetId: process.env.GOOGLE_SHEET_ID,
-    range: `Брони!A${index + 2}:X${index + 2}`,
+    range: `Брони!A${index + 2}:AA${index + 2}`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [toRow(updated)] },
   });
@@ -436,7 +470,7 @@ export async function ensureSheet() {
   }
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: "Брони!A1:X1",
+    range: "Брони!A1:AA1",
     valueInputOption: "RAW",
     requestBody: { values: [HEADERS] },
   });

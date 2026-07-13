@@ -11,6 +11,9 @@ export const mockRequests: BookingRequest[] = [
   {
     id: "REQ-1048",
     createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    confirmedAt: "",
+    cancelledAt: "",
     date: isoDate(1),
     time: "18:00",
     duration: 120,
@@ -46,6 +49,9 @@ export const mockRequests: BookingRequest[] = [
   {
     id: "REQ-1047",
     createdAt: new Date(Date.now() - 3600000).toISOString(),
+    updatedAt: new Date(Date.now() - 1800000).toISOString(),
+    confirmedAt: new Date(Date.now() - 1800000).toISOString(),
+    cancelledAt: "",
     date: isoDate(2),
     time: "20:00",
     duration: 60,
@@ -81,6 +87,9 @@ export const mockRequests: BookingRequest[] = [
   {
     id: "REQ-1046",
     createdAt: new Date(Date.now() - 7200000).toISOString(),
+    updatedAt: new Date(Date.now() - 7200000).toISOString(),
+    confirmedAt: "",
+    cancelledAt: "",
     date: isoDate(3),
     time: "17:00",
     duration: 60,

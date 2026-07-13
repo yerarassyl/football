@@ -13,6 +13,9 @@ export type PaymentRecord = {
 export type BookingRequest = {
   id: string;
   createdAt: string;
+  updatedAt: string;
+  confirmedAt: string;
+  cancelledAt: string;
   date: string;
   time: string;
   duration: number;
@@ -42,6 +45,9 @@ export type BookingInput = Omit<
   BookingRequest,
   | "id"
   | "createdAt"
+  | "updatedAt"
+  | "confirmedAt"
+  | "cancelledAt"
   | "status"
   | "paymentStatus"
   | "prepayment"

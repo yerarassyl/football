@@ -26,6 +26,9 @@ const HEADERS = [
   "Комментарий",
   "Удалено",
   "История оплат JSON",
+  "Обновлено",
+  "Подтверждено",
+  "Отменено",
 ];
 const STATUSES = ["new", "in_progress", "confirmed", "cancelled", "deleted"];
 const QUARTERS = ["A", "B", "C", "D"];
@@ -136,7 +139,8 @@ function updateBooking_(id, patch) {
   if (index === -1) throw new Error("Бронь не найдена");
 
   const bookings = rows.map(fromRow_);
-  const updated = enrichBooking_(Object.assign({}, bookings[index], patch, { id }));
+  const lifecyclePatch = applyLifecyclePatch_(bookings[index], patch || {});
+  const updated = enrichBooking_(Object.assign({}, bookings[index], lifecyclePatch, { id }));
   ensureNoConflict_(updated, id, bookings);
   sheet.getRange(index + 2, 1, 1, HEADERS.length).setValues([toRow_(updated)]);
   return updated;
@@ -341,6 +345,9 @@ function fromRow_(row) {
   return enrichBooking_({
     id: text_(row[0]).replace(/^'/, ""),
     createdAt: text_(row[1]).replace(/^'/, ""),
+    updatedAt: text_(row[24] || row[1]).replace(/^'/, ""),
+    confirmedAt: text_(row[25] || "").replace(/^'/, ""),
+    cancelledAt: text_(row[26] || "").replace(/^'/, ""),
     date: text_(row[2]).replace(/^'/, ""),
     time: text_(row[3]).replace(/^'/, ""),
     duration: Number(row[4]) || 60,
@@ -394,6 +401,9 @@ function toRow_(booking) {
     item.comment,
     item.deletedAt,
     JSON.stringify(item.payments || []),
+    item.updatedAt,
+    item.confirmedAt,
+    item.cancelledAt,
   ];
 }
 
@@ -451,6 +461,9 @@ function enrichBooking_(booking) {
     price: salePrice,
     listPrice,
     salePrice,
+    updatedAt: text_(booking.updatedAt || booking.createdAt || "").replace(/^'/, ""),
+    confirmedAt: text_(booking.confirmedAt || "").replace(/^'/, ""),
+    cancelledAt: text_(booking.cancelledAt || "").replace(/^'/, ""),
     source: booking.source || "Сайт",
     sourceDetail: booking.sourceDetail || "",
     status: normalizeStatus_(booking.status),
@@ -463,6 +476,22 @@ function enrichBooking_(booking) {
     comment: booking.comment || "",
     deletedAt: text_(booking.deletedAt || "").replace(/^'/, ""),
     payments,
+  });
+}
+
+function applyLifecyclePatch_(current, patch) {
+  const nextStatus = patch.status || current.status;
+  const now = new Date().toISOString();
+  return Object.assign({}, patch, {
+    updatedAt: patch.updatedAt || now,
+    confirmedAt: nextStatus === "confirmed"
+      ? patch.confirmedAt || current.confirmedAt || now
+      : patch.confirmedAt != null ? patch.confirmedAt : current.confirmedAt,
+    cancelledAt: nextStatus === "cancelled"
+      ? patch.cancelledAt || current.cancelledAt || now
+      : nextStatus !== current.status && nextStatus !== "cancelled"
+        ? ""
+        : patch.cancelledAt != null ? patch.cancelledAt : current.cancelledAt,
   });
 }
 

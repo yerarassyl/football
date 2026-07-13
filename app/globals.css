@@ -1839,6 +1839,10 @@ a {
   margin-bottom: 14px;
 }
 
+.analytics-grid-wide {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .analytics-card {
   padding: 20px;
 }
@@ -1873,6 +1877,67 @@ a {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.analytics-tables-wide {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.analytics-filter-card {
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.analytics-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.analytics-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.analytics-tabs button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--white);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.analytics-tabs button.active {
+  color: var(--white);
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.analytics-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.analytics-range select,
+.analytics-range input {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--white);
+  font-size: 11px;
+}
+
+.analytics-range span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .analytics-table {
@@ -1934,6 +1999,14 @@ a {
   color: var(--green);
   font-size: 12px;
   font-weight: 900;
+}
+
+.analytics-row-warning > span {
+  color: #b67a10;
+}
+
+.analytics-row-danger > span {
+  color: var(--red);
 }
 
 .selected-booking-row {
@@ -2399,6 +2472,11 @@ a {
     grid-template-columns: 1fr;
   }
 
+  .analytics-grid-wide,
+  .analytics-tables-wide {
+    grid-template-columns: 1fr;
+  }
+
   .admin-layout {
     grid-template-columns: 190px minmax(0, 1fr);
   }
@@ -2732,6 +2810,20 @@ a {
 
   .analytics-card {
     padding: 16px;
+  }
+
+  .analytics-toolbar {
+    flex-direction: column;
+  }
+
+  .analytics-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 4px;
+  }
+
+  .analytics-tabs button {
+    flex: 0 0 auto;
   }
 
   .analytics-table-head,
