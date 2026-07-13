@@ -178,6 +178,7 @@ a {
   max-width: 1240px;
   padding: 0 24px 80px;
   margin: -34px auto 0;
+  overflow-x: clip;
 }
 
 .arena-location-card {
@@ -477,10 +478,17 @@ a {
 .duration-quick-row {
   display: flex;
   gap: 7px;
+  width: 100%;
   padding-bottom: 10px;
   margin-bottom: 10px;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  scroll-padding-inline: 8px;
+}
+
+.duration-quick-row::-webkit-scrollbar {
+  display: none;
 }
 
 .duration-quick-row button {
@@ -1886,6 +1894,7 @@ a {
 .analytics-filter-card {
   padding: 16px 18px;
   margin-bottom: 14px;
+  overflow: hidden;
 }
 
 .analytics-toolbar {
@@ -1893,12 +1902,15 @@ a {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  min-width: 0;
 }
 
 .analytics-tabs {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .analytics-tabs button {
@@ -2597,8 +2609,10 @@ a {
   }
 
   .duration-quick-row {
+    width: calc(100% + 4px);
     margin-left: -2px;
     margin-right: -2px;
+    padding-right: 10px;
   }
 
   .date-time-part {
@@ -2814,16 +2828,35 @@ a {
 
   .analytics-toolbar {
     flex-direction: column;
+    align-items: stretch;
   }
 
   .analytics-tabs {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow-x: auto;
     flex-wrap: nowrap;
     padding-bottom: 4px;
+    padding-right: 4px;
+    scrollbar-width: none;
+  }
+
+  .analytics-tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .analytics-tabs button {
     flex: 0 0 auto;
+  }
+
+  .analytics-range {
+    width: 100%;
+  }
+
+  .analytics-range select,
+  .analytics-range input {
+    flex: 1 1 120px;
   }
 
   .analytics-table-head,
