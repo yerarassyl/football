@@ -34,12 +34,7 @@ const STATUSES = ["new", "in_progress", "confirmed", "cancelled", "deleted"];
 const QUARTERS = ["A", "B", "C", "D"];
 
 function doGet(event) {
-  try {
-    authorize_(event.parameter.secret);
-    return json_({ ok: true, bookings: readBookings_() });
-  } catch (error) {
-    return json_({ ok: false, error: error.message });
-  }
+  return json_({ ok: false, error: "Используйте POST" });
 }
 
 function doPost(event) {
@@ -47,26 +42,44 @@ function doPost(event) {
     const body = JSON.parse(event.postData.contents || "{}");
     authorize_(body.secret);
 
+    if (body.action === "list") {
+      return json_({ ok: true, bookings: readBookings_() });
+    }
+
     if (body.action === "create") {
       const booking = enrichBooking_(body.booking);
-      appendBooking_(booking);
+      validateBooking_(booking);
+      withScriptLock_(function () {
+        const bookings = readBookings_();
+        ensureUniqueId_(booking.id, bookings);
+        appendBooking_(booking);
+      });
       return json_({ ok: true, booking });
     }
 
     if (body.action === "createIfAvailable") {
       const booking = enrichBooking_(body.booking);
-      ensureNoConflict_(booking);
-      appendBooking_(booking);
+      validateBooking_(booking);
+      withScriptLock_(function () {
+        const bookings = readBookings_();
+        ensureUniqueId_(booking.id, bookings);
+        ensureNoConflict_(booking, null, bookings);
+        appendBooking_(booking);
+      });
       return json_({ ok: true, booking });
     }
 
     if (body.action === "update") {
-      const booking = updateBooking_(body.id, body.patch);
+      const booking = withScriptLock_(function () {
+        return updateBooking_(body.id, body.patch);
+      });
       return json_({ ok: true, booking });
     }
 
     if (body.action === "delete") {
-      deleteBooking_(body.id);
+      withScriptLock_(function () {
+        deleteBooking_(body.id);
+      });
       return json_({ ok: true });
     }
 
@@ -389,6 +402,16 @@ function authorize_(secret) {
   if (!expected || secret !== expected) throw new Error("Нет доступа");
 }
 
+function withScriptLock_(callback) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw new Error("Сервис занят. Повторите попытку");
+  try {
+    return callback();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function getSpreadsheet_() {
   const spreadsheetId = PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID");
   if (!spreadsheetId) throw new Error("Не задано свойство SPREADSHEET_ID");
@@ -431,6 +454,7 @@ function updateBooking_(id, patch) {
   const bookings = rows.map(fromRow_);
   const lifecyclePatch = applyLifecyclePatch_(bookings[index], patch || {});
   const updated = enrichBooking_(Object.assign({}, bookings[index], lifecyclePatch, { id }));
+  validateBooking_(updated);
   ensureNoConflict_(updated, id, bookings);
   sheet.getRange(index + 2, 1, 1, HEADERS.length).setValues([toRow_(updated)]);
   return updated;
@@ -451,6 +475,39 @@ function ensureNoConflict_(booking, ignoredId, sourceBookings) {
   const bookings = sourceBookings || readBookings_();
   const conflict = bookings.find((item) => hasConflict_(item, booking, ignoredId));
   if (conflict) throw new Error(conflictMessage_(conflict));
+}
+
+function ensureUniqueId_(id, bookings) {
+  if (!id || bookings.some((booking) => booking.id === id)) {
+    throw new Error("ID заявки уже существует");
+  }
+}
+
+function validateBooking_(booking) {
+  const date = text_(booking.date).replace(/^'/, "");
+  const time = text_(booking.time).replace(/^'/, "");
+  const format = text_(booking.format);
+  const sector = text_(booking.sector).toUpperCase();
+  const duration = Number(booking.duration);
+  const allowedSectors = {
+    quarter: ["A", "B", "C", "D"],
+    half: ["A+B", "C+D", "A+C", "B+D"],
+    full: ["A+B+C+D"],
+  };
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Некорректная дата");
+  if (!/^([01]\d|2[0-3]):(00|30)$/.test(time)) throw new Error("Некорректное время");
+  if (!Number.isInteger(duration) || duration < 60 || duration > 720 || duration % 30 !== 0) {
+    throw new Error("Некорректная длительность");
+  }
+  const startParts = time.split(":");
+  const startMinutes = Number(startParts[0]) * 60 + Number(startParts[1]);
+  if (startMinutes + duration > 1440) throw new Error("Бронь выходит за пределы дня");
+  if (!allowedSectors[format] || allowedSectors[format].indexOf(sector) === -1) {
+    throw new Error("Некорректный формат или сектор");
+  }
+  if (!text_(booking.name).trim() || !text_(booking.phone).trim()) throw new Error("Не указаны контакты клиента");
+  if (!(Number(booking.listPrice) > 0) || !(Number(booking.salePrice) > 0)) throw new Error("Некорректная стоимость");
 }
 
 function hasConflict_(existing, booking, ignoredId) {

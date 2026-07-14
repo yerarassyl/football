@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE, verifyAuthToken } from "@/lib/auth";
 import { BookingConflictError, deleteRequest, updateRequest } from "@/lib/sheets";
-import { BookingRequest } from "@/lib/types";
+import { readJsonObject, validateBookingPatch, ValidationError } from "@/lib/validation";
 
 export async function PATCH(
   request: NextRequest,
@@ -12,11 +12,14 @@ export async function PATCH(
   }
   try {
     const { id } = await context.params;
-    const patch = (await request.json()) as Partial<BookingRequest>;
+    const patch = validateBookingPatch(await readJsonObject(request));
     const updated = await updateRequest(id, patch);
     if (!updated) return NextResponse.json({ error: "Заявка не найдена" }, { status: 404 });
     return NextResponse.json(updated);
   } catch (error) {
+    if (error instanceof ValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     if (error instanceof BookingConflictError) {
       return NextResponse.json({ error: error.message }, { status: 409 });
     }

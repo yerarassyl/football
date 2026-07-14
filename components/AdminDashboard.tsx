@@ -4,9 +4,12 @@ import {
   BarChart3,
   CalendarDays,
   CalendarPlus,
+  Check,
+  ChevronLeft,
   CircleDollarSign,
   CopyPlus,
   LogOut,
+  ListChecks,
   Plus,
   RefreshCcw,
   Save,
@@ -15,9 +18,10 @@ import {
   Trophy,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { enrichBooking, formatLabel } from "@/lib/booking";
 import { FIELD_OPTIONS, FieldOption, formatPrice, SECTORS } from "@/lib/constants";
-import { bookingEndTime, formatDuration } from "@/lib/time";
+import { arenaDateValue, bookingEndTime, formatDuration } from "@/lib/time";
 import { BookingRequest, FieldFormat, PaymentRecord, RequestStatus } from "@/lib/types";
 import CalendarPicker from "./CalendarPicker";
 
@@ -104,12 +108,6 @@ function addDays(date: string, days: number) {
   const next = new Date(`${date}T00:00:00`);
   next.setDate(next.getDate() + days);
   return next.toISOString().slice(0, 10);
-}
-
-function localDateValue() {
-  const now = new Date();
-  const offset = now.getTimezoneOffset() * 60_000;
-  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
 }
 
 function diffDays(from: string, to: string) {
@@ -200,7 +198,7 @@ function noticeText(error: unknown) {
 }
 
 export default function AdminDashboard() {
-  const today = localDateValue();
+  const today = arenaDateValue();
   const [tab, setTab] = useState<Tab>("schedule");
   const [bookings, setBookings] = useState<BookingRequest[]>([]);
   const [selectedDate, setSelectedDate] = useState(today);
@@ -210,6 +208,7 @@ export default function AdminDashboard() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [fieldOptions, setFieldOptions] = useState<FieldOption[]>(FIELD_OPTIONS);
 
@@ -221,30 +220,54 @@ export default function AdminDashboard() {
   }
 
   async function load() {
-    const response = await fetch("/api/bookings", { cache: "no-store" });
-    if (response.status === 401) {
-      window.location.href = "/admin/login";
-      return;
+    setLoading(true);
+    try {
+      const response = await fetch("/api/bookings", { cache: "no-store" });
+      if (response.status === 401) {
+        window.location.href = "/admin/login";
+        return;
+      }
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data)) {
+        throw new Error(data?.error || "Не удалось загрузить брони");
+      }
+      setBookings(data.map(enrichBooking));
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    } finally {
+      setLoading(false);
     }
-    const data = (await response.json()) as BookingRequest[];
-    setBookings(data.map(enrichBooking));
-    setLoading(false);
   }
 
   async function loadSettings() {
-    const response = await fetch("/api/settings", { cache: "no-store" });
-    const settings = await response.json();
-    setFieldOptions((items) =>
-      items.map((item) => ({
-        ...item,
-        price: settings.prices?.[item.id] ?? item.price,
-      })),
-    );
+    try {
+      const response = await fetch("/api/settings", { cache: "no-store" });
+      const settings = await response.json();
+      if (!response.ok) throw new Error(settings.error || "Не удалось загрузить цены");
+      setFieldOptions((items) =>
+        items.map((item) => ({
+          ...item,
+          price: settings.prices?.[item.id] ?? item.price,
+        })),
+      );
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
   }
 
   useEffect(() => {
     void load();
     void loadSettings();
+    // Initial hydration only; both actions are also invoked explicitly after mutations.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 620px)");
+    const sync = () => setIsMobile(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
   }, []);
 
   const selectedBooking = useMemo(
@@ -294,10 +317,16 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!currentQueue || createMode) return;
     const activeSelection = bookings.find((item) => item.id === selectedId);
+    if (isMobile) {
+      if (!activeSelection || activeSelection.status !== currentQueue.status) {
+        setSelectedId("");
+      }
+      return;
+    }
     if (!activeSelection || activeSelection.status !== currentQueue.status) {
       setSelectedId(statusQueues[currentQueue.tab][0]?.id || "");
     }
-  }, [bookings, createMode, currentQueue, selectedId, statusQueues]);
+  }, [bookings, createMode, currentQueue, isMobile, selectedId, statusQueues]);
 
   async function persistPatch(id: string, patch: Partial<BookingRequest>) {
     const response = await fetch(`/api/bookings/${id}`, {
@@ -346,20 +375,16 @@ export default function AdminDashboard() {
         const createResponse = await fetch("/api/bookings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ ...payload, status: editor.status, comment: editor.comment }),
         });
         const created = await createResponse.json();
         if (!createResponse.ok) {
           throw new Error(created.error || "Не удалось создать бронь");
         }
 
-        const finalized = await persistPatch((created as BookingRequest).id, {
-          status: editor.status,
-          comment: editor.comment,
-          source: payload.source,
-          sourceDetail: payload.sourceDetail,
-        });
+        const finalized = enrichBooking(created as BookingRequest);
         setBookings((current) => [finalized, ...current.filter((item) => item.id !== finalized.id)]);
+        setSelectedId(finalized.id);
         setCreateMode(false);
         showNotice("success", "Бронь создана");
       }
@@ -391,6 +416,7 @@ export default function AdminDashboard() {
   }
 
   async function moveToTrash(id: string) {
+    if (!window.confirm("Переместить эту бронь в корзину?")) return;
     try {
       await persistPatch(id, { status: "deleted", deletedAt: new Date().toISOString() });
       showNotice("success", "Бронь отправлена в корзину");
@@ -409,6 +435,7 @@ export default function AdminDashboard() {
   }
 
   async function deleteForever(id: string) {
+    if (!window.confirm("Удалить бронь навсегда? Это действие нельзя отменить.")) return;
     try {
       const response = await fetch(`/api/bookings/${id}`, { method: "DELETE" });
       const result = await response.json();
@@ -466,47 +493,83 @@ export default function AdminDashboard() {
     setTab("schedule");
   }
 
+  function openMobileBookings(nextTab: QueueTab | "trash" = "status:new") {
+    setCreateMode(false);
+    setSelectedId("");
+    setQuery("");
+    setTab(nextTab);
+  }
+
+  const showMobileDetails = isMobile && (createMode || Boolean(selectedBooking));
+
   return (
     <div className="admin-layout">
       <aside className="admin-sidebar">
-        <a className="brand admin-brand" href="/">
+        <Link className="brand admin-brand" href="/">
           <span className="brand-mark"><Trophy size={18} /></span> Air Arena
-        </a>
+        </Link>
         <nav>
           <button className={tab === "schedule" ? "active" : ""} onClick={() => setTab("schedule")}>
-            <CalendarDays size={18} /> График
+            <CalendarDays size={18} />
+            <span className="nav-label" data-short="День">График</span>
+          </button>
+          <button
+            className={`mobile-all-nav ${currentQueue || tab === "trash" ? "active" : ""}`}
+            onClick={() => openMobileBookings(currentQueue?.tab || (tab === "trash" ? "trash" : "status:new"))}
+            type="button"
+          >
+            <ListChecks size={18} />
+            <span className="nav-label" data-short="Все">Все заявки</span>
           </button>
           {queueTabs.map((item) => {
             const Icon = item.icon;
             const count = bookings.filter((booking) => booking.status === item.status).length;
             return (
-              <button className={tab === item.tab ? "active" : ""} key={item.tab} onClick={() => setTab(item.tab)}>
-                <Icon size={18} /> {item.label}
-                <span>{count}</span>
+              <button className={`desktop-queue-nav ${tab === item.tab ? "active" : ""}`} key={item.tab} onClick={() => setTab(item.tab)}>
+                <Icon size={18} />
+                <span
+                  className="nav-label"
+                  data-short={
+                    item.status === "new"
+                      ? "Новые"
+                      : item.status === "in_progress"
+                        ? "В работе"
+                        : item.status === "confirmed"
+                          ? "Подтв."
+                          : "Отмена"
+                  }
+                >
+                  {item.label}
+                </span>
+                <span className="nav-badge">{count}</span>
               </button>
             );
           })}
           <button className={tab === "repeat" ? "active" : ""} onClick={() => setTab("repeat")}>
-            <CopyPlus size={18} /> Повтор
+            <CopyPlus size={18} />
+            <span className="nav-label" data-short="Повтор">Повтор</span>
           </button>
-          <button className={tab === "trash" ? "active" : ""} onClick={() => setTab("trash")}>
-            <Trash2 size={18} /> Корзина
+          <button className={`desktop-trash-nav ${tab === "trash" ? "active" : ""}`} onClick={() => setTab("trash")}>
+            <Trash2 size={18} />
+            <span className="nav-label" data-short="Корзина">Корзина</span>
           </button>
           <button className={tab === "analytics" ? "active" : ""} onClick={() => setTab("analytics")}>
-            <BarChart3 size={18} /> Аналитика
+            <BarChart3 size={18} />
+            <span className="nav-label" data-short="Аналит.">Аналитика</span>
           </button>
           <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>
-            <CircleDollarSign size={18} /> Цены
+            <CircleDollarSign size={18} />
+            <span className="nav-label" data-short="Цены">Цены</span>
           </button>
         </nav>
         <button className="logout-button" onClick={logout}><LogOut size={16} /> Выйти</button>
       </aside>
 
       <main className="admin-main">
-        {notice && <div className={`admin-toast ${notice.type}`}>{notice.text}</div>}
+        {notice && <div role="status" aria-live="polite" className={`admin-toast ${notice.type}`}>{notice.text}</div>}
         <div className="admin-mobile-head">
           <span className="brand"><span className="brand-mark"><Trophy size={16} /></span> Air Arena</span>
-          <button className="secondary-button" onClick={logout}><LogOut size={15} /></button>
+          <button aria-label="Выйти из админки" className="secondary-button" onClick={logout}><LogOut size={15} /></button>
         </div>
 
         {tab === "schedule" && (
@@ -535,8 +598,8 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="admin-schedule-grid">
-              <section className="admin-card schedule-panel">
+            <div className={`admin-schedule-grid ${showMobileDetails ? "mobile-detail-mode" : ""}`}>
+              <section className={`admin-card schedule-panel ${showMobileDetails ? "mobile-list-hidden" : ""}`}>
                 <div className="schedule-toolbar">
                   <CalendarPicker value={selectedDate} onChange={setSelectedDate} />
                   <div className="search-box schedule-search">
@@ -594,7 +657,12 @@ export default function AdminDashboard() {
                 createMode={createMode}
                 editor={editor}
                 fieldOptions={fieldOptions}
+                mobileView={showMobileDetails}
                 onAddPayment={addPayment}
+                onBack={() => {
+                  setCreateMode(false);
+                  setSelectedId("");
+                }}
                 onChange={setEditor}
                 onDelete={() => selectedBooking && void moveToTrash(selectedBooking.id)}
                 onSave={saveBooking}
@@ -630,8 +698,25 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="admin-schedule-grid">
-              <section className="admin-card schedule-panel">
+            <div className="mobile-booking-tabs" aria-label="Фильтр заявок">
+              {queueTabs.map((item) => (
+                <button
+                  className={tab === item.tab ? "active" : ""}
+                  aria-pressed={tab === item.tab}
+                  key={item.tab}
+                  onClick={() => openMobileBookings(item.tab)}
+                  type="button"
+                >
+                  {item.label}<span>{bookings.filter((booking) => booking.status === item.status).length}</span>
+                </button>
+              ))}
+              <button aria-pressed={false} onClick={() => openMobileBookings("trash")} type="button">
+                Корзина<span>{bookings.filter((booking) => booking.status === "deleted").length}</span>
+              </button>
+            </div>
+
+            <div className={`admin-schedule-grid ${showMobileDetails ? "mobile-detail-mode" : ""}`}>
+              <section className={`admin-card schedule-panel ${showMobileDetails ? "mobile-list-hidden" : ""}`}>
                 <div className="schedule-toolbar schedule-toolbar-compact">
                   <div className="queue-summary-card">
                     <strong>{currentQueue.label}</strong>
@@ -692,7 +777,12 @@ export default function AdminDashboard() {
                 createMode={createMode}
                 editor={editor}
                 fieldOptions={fieldOptions}
+                mobileView={showMobileDetails}
                 onAddPayment={addPayment}
+                onBack={() => {
+                  setCreateMode(false);
+                  setSelectedId("");
+                }}
                 onChange={setEditor}
                 onDelete={() => selectedBooking && void moveToTrash(selectedBooking.id)}
                 onSave={saveBooking}
@@ -711,6 +801,16 @@ export default function AdminDashboard() {
                 <h1>Удаленные брони</h1>
                 <p>Можно восстановить бронь или удалить запись из Google Sheets навсегда.</p>
               </div>
+            </div>
+            <div className="mobile-booking-tabs" aria-label="Фильтр заявок">
+              {queueTabs.map((item) => (
+                <button aria-pressed={false} key={item.tab} onClick={() => openMobileBookings(item.tab)} type="button">
+                  {item.label}<span>{bookings.filter((booking) => booking.status === item.status).length}</span>
+                </button>
+              ))}
+              <button aria-pressed="true" className="active" onClick={() => openMobileBookings("trash")} type="button">
+                Корзина<span>{trashBookings.length}</span>
+              </button>
             </div>
             <section className="admin-card trash-list">
               <div className="toolbar">
@@ -760,7 +860,9 @@ function BookingEditor({
   createMode,
   editor,
   fieldOptions,
+  mobileView,
   onAddPayment,
+  onBack,
   onChange,
   onDelete,
   onSave,
@@ -771,7 +873,9 @@ function BookingEditor({
   createMode: boolean;
   editor: EditorState;
   fieldOptions: FieldOption[];
+  mobileView: boolean;
   onAddPayment: (payment: Omit<PaymentRecord, "id">) => Promise<void>;
+  onBack: () => void;
   onChange: (editor: EditorState) => void;
   onDelete: () => void;
   onSave: (event: FormEvent) => Promise<void>;
@@ -784,7 +888,7 @@ function BookingEditor({
   const sectorOptions = SECTORS[editor.format];
   const [paymentForm, setPaymentForm] = useState({
     amount: "",
-    date: localDateValue(),
+    date: arenaDateValue(),
     method: "Не выбран",
     recipient: "Не выбран",
   });
@@ -792,7 +896,7 @@ function BookingEditor({
   useEffect(() => {
     setPaymentForm({
       amount: "",
-      date: localDateValue(),
+      date: arenaDateValue(),
       method: "Не выбран",
       recipient: "Не выбран",
     });
@@ -809,7 +913,12 @@ function BookingEditor({
   }
 
   return (
-    <aside className="admin-card booking-editor">
+    <aside className={`admin-card booking-editor ${mobileView ? "mobile-editor-visible" : ""}`}>
+      {mobileView && (
+        <button className="editor-back-button" onClick={onBack} type="button">
+          <ChevronLeft size={16} /> Назад к списку
+        </button>
+      )}
       <div className="editor-head">
         <div>
           <small>{createMode ? "Новая запись" : booking?.id}</small>
@@ -943,8 +1052,10 @@ function BookingEditor({
             className="payment-add-form"
             onSubmit={(event) => {
               event.preventDefault();
+              const amount = Number(paymentForm.amount);
+              if (!Number.isFinite(amount) || amount <= 0) return;
               void onAddPayment({
-                amount: Number(paymentForm.amount) || 0,
+                amount,
                 date: paymentForm.date,
                 method: paymentForm.method,
                 recipient: paymentForm.recipient,
@@ -954,7 +1065,7 @@ function BookingEditor({
             <div className="editor-grid payment-form-grid">
               <label className="form-field">
                 <span>Сумма</span>
-                <input type="number" min="0" required value={paymentForm.amount} onChange={(event) => setPaymentForm({ ...paymentForm, amount: event.target.value })} />
+                <input type="number" min="1" required value={paymentForm.amount} onChange={(event) => setPaymentForm({ ...paymentForm, amount: event.target.value })} />
               </label>
               <label className="form-field">
                 <span>Дата</span>
@@ -990,7 +1101,7 @@ function RepeatPlanner({
   bookings: BookingRequest[];
   onComplete: (message: string) => Promise<void>;
 }) {
-  const today = localDateValue();
+  const today = arenaDateValue();
   const [sourceFrom, setSourceFrom] = useState(today);
   const [sourceTo, setSourceTo] = useState(today);
   const [mode, setMode] = useState<"once" | "month" | "until">("once");
@@ -998,6 +1109,7 @@ function RepeatPlanner({
   const [untilDate, setUntilDate] = useState(addDays(today, 28));
   const [working, setWorking] = useState(false);
   const [result, setResult] = useState("");
+  const [selectedBookingIds, setSelectedBookingIds] = useState<string[]>([]);
 
   const sourceBookings = useMemo(
     () => bookings
@@ -1007,10 +1119,40 @@ function RepeatPlanner({
     [bookings, sourceFrom, sourceTo],
   );
 
+  useEffect(() => {
+    const availableIds = new Set(sourceBookings.map((item) => item.id));
+    setSelectedBookingIds((current) => {
+      const kept = current.filter((id) => availableIds.has(id));
+      const next = [...kept];
+      sourceBookings.forEach((booking) => {
+        if (!next.includes(booking.id)) next.push(booking.id);
+      });
+      return next;
+    });
+  }, [sourceBookings]);
+
+  const selectedSourceBookings = useMemo(
+    () => sourceBookings.filter((booking) => selectedBookingIds.includes(booking.id)),
+    [selectedBookingIds, sourceBookings],
+  );
+
+  function toggleBookingSelection(bookingId: string) {
+    setSelectedBookingIds((current) =>
+      current.includes(bookingId)
+        ? current.filter((id) => id !== bookingId)
+        : [...current, bookingId],
+    );
+  }
+
   async function repeatSchedule(event: FormEvent) {
     event.preventDefault();
     if (sourceBookings.length === 0) {
       setResult("В выбранном исходном периоде нет активных броней.");
+      return;
+    }
+
+    if (selectedSourceBookings.length === 0) {
+      setResult("Выберите хотя бы одну бронь для повторения.");
       return;
     }
 
@@ -1030,7 +1172,7 @@ function RepeatPlanner({
 
     try {
       for (const shift of shifts) {
-        for (const booking of sourceBookings) {
+        for (const booking of selectedSourceBookings) {
           const payload = {
             date: addDays(booking.date, shift),
             time: booking.time,
@@ -1045,6 +1187,8 @@ function RepeatPlanner({
             team: booking.team,
             source: "Повтор расписания",
             sourceDetail: `${booking.date} ${booking.time}`,
+            status: "confirmed",
+            comment: `Повторено из ${booking.date} ${booking.time}`,
           };
 
           const response = await fetch("/api/bookings", {
@@ -1059,14 +1203,6 @@ function RepeatPlanner({
             continue;
           }
 
-          await fetch(`/api/bookings/${(result as BookingRequest).id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              status: "confirmed",
-              comment: `Повторено из ${booking.date} ${booking.time}`,
-            }),
-          });
           created += 1;
         }
       }
@@ -1098,13 +1234,14 @@ function RepeatPlanner({
             <span>Исходная дата по</span>
             <input type="date" value={sourceTo} onChange={(event) => setSourceTo(event.target.value)} />
           </label>
-          <label className="form-field">
+          <label className="form-field repeat-mode-field">
             <span>Сценарий</span>
-            <select value={mode} onChange={(event) => setMode(event.target.value as "once" | "month" | "until")}>
+            <select className="repeat-mode-select" value={mode} onChange={(event) => setMode(event.target.value as "once" | "month" | "until")}>
               <option value="once">Скопировать период один раз</option>
               <option value="month">Повторить на месяц</option>
               <option value="until">Продлить до даты</option>
             </select>
+            <span aria-hidden="true" className="repeat-mode-caret" />
           </label>
           <label className="form-field">
             <span>Начать с даты</span>
@@ -1118,16 +1255,28 @@ function RepeatPlanner({
           )}
         </div>
         <div className="repeat-preview">
-          <strong>Исходных броней: {sourceBookings.length}</strong>
-          <small>Конфликты не сохраняются: система пропустит занятые слоты и покажет причину.</small>
+          <strong>Исходных броней: {selectedSourceBookings.length} из {sourceBookings.length}</strong>
+          <small>Все брони отмечены по умолчанию. Снимите галочки у тех, которые не нужно повторять.</small>
         </div>
         {sourceBookings.length > 0 && (
           <div className="repeat-source-list">
-            {sourceBookings.slice(0, 8).map((booking) => (
-              <div className="repeat-source-row" key={booking.id}>
-                <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
-                <span>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</span>
-              </div>
+            {sourceBookings.map((booking) => (
+              <label className={`repeat-source-row ${selectedBookingIds.includes(booking.id) ? "selected" : ""}`} key={booking.id}>
+                <span className="repeat-source-check">
+                  <input
+                    checked={selectedBookingIds.includes(booking.id)}
+                    onChange={() => toggleBookingSelection(booking.id)}
+                    type="checkbox"
+                  />
+                  <span className="repeat-source-checkmark">
+                    <Check size={14} strokeWidth={3} />
+                  </span>
+                </span>
+                <span className="repeat-source-content">
+                  <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
+                  <span>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</span>
+                </span>
+              </label>
             ))}
           </div>
         )}
@@ -1202,10 +1351,6 @@ function daysBetween(from: string, to: string) {
   return Math.max(1, diffDays(from, to) + 1);
 }
 
-function dayStart(value: string) {
-  return new Date(`${value}T00:00:00`).getTime();
-}
-
 function hoursBetween(fromIso: string, toIso: string) {
   const from = new Date(fromIso).getTime();
   const to = new Date(toIso).getTime();
@@ -1230,7 +1375,7 @@ function AnalyticsDashboard({
   onOpenFilter: (nextTab: Tab, nextQuery: string) => void;
   onOpenDate: (date: string) => void;
 }) {
-  const today = localDateValue();
+  const today = arenaDateValue();
   const [view, setView] = useState<AnalyticsView>("overview");
   const [preset, setPreset] = useState<RangePreset>("month");
   const [customFrom, setCustomFrom] = useState(periodStartDate(today, "month"));
@@ -1826,24 +1971,30 @@ function PriceSettings({
   async function save(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
+    setMessage("");
     const nextPrices = {
       quarter: Number(prices.quarter) || 0,
       half: Number(prices.half) || 0,
       full: Number(prices.full) || 0,
     };
-    const response = await fetch("/api/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prices: nextPrices }),
-    });
-    const result = await response.json();
-    if (response.ok) {
-      onChange(fieldOptions.map((item) => ({ ...item, price: result.prices[item.id] ?? item.price })));
-      setMessage("Цены сохранены");
-    } else {
-      setMessage(result.error || "Не удалось сохранить цены");
+    try {
+      const response = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prices: nextPrices }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (response.ok) {
+        onChange(fieldOptions.map((item) => ({ ...item, price: result.prices[item.id] ?? item.price })));
+        setMessage("Цены сохранены");
+      } else {
+        setMessage(result.error || "Не удалось сохранить цены");
+      }
+    } catch {
+      setMessage("Нет связи с сервером. Повторите попытку");
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   }
 
   return (
@@ -1860,11 +2011,11 @@ function PriceSettings({
           {fieldOptions.map((option) => (
             <label className="form-field" key={option.id}>
               <span>{option.shortLabel}</span>
-              <input type="number" min="0" value={prices[option.id]} onChange={(event) => setPrices({ ...prices, [option.id]: event.target.value })} />
+              <input type="number" min="1" required value={prices[option.id]} onChange={(event) => setPrices({ ...prices, [option.id]: event.target.value })} />
             </label>
           ))}
         </div>
-        {message && <div className={`admin-booking-message ${message === "Цены сохранены" ? "success" : ""}`}>{message}</div>}
+        {message && <div role="status" aria-live="polite" className={`admin-booking-message ${message === "Цены сохранены" ? "success" : ""}`}>{message}</div>}
         <div className="settings-actions">
           <button className="primary-button" disabled={saving} type="submit">
             <CircleDollarSign size={16} /> {saving ? "Сохраняем..." : "Сохранить цены"}

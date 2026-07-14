@@ -3,7 +3,6 @@
 import {
   ArrowRight,
   CalendarDays,
-  Check,
   CheckCircle2,
   Clock3,
   MapPin,
@@ -12,11 +11,12 @@ import {
   Trophy,
   UserRound,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import Image from "next/image";
 import { DURATION_OPTIONS, FIELD_OPTIONS, FieldOption, formatPrice, SECTORS, TIME_SLOTS } from "@/lib/constants";
 import { normalizeReferralSource, referralDetail } from "@/lib/referrals";
 import { FieldFormat } from "@/lib/types";
-import { bookingEndTime, formatDuration } from "@/lib/time";
+import { arenaDateValue, bookingEndTime, formatDuration } from "@/lib/time";
 import CalendarPicker from "./CalendarPicker";
 
 const months = [
@@ -34,7 +34,7 @@ const months = [
   "декабря",
 ];
 
-const todayIso = new Date().toISOString().slice(0, 10);
+const todayIso = arenaDateValue();
 const arenaPhone = "+7 700 200 40 02";
 const arenaMapUrl = "https://2gis.kz/astana/search/%D0%A2%D1%83%D1%80%D0%B0%D0%BD%2090%D0%B0";
 
@@ -172,12 +172,10 @@ export default function BookingPage() {
     return ["A", "B", "C", "D"].every((item) => occupied.includes(item));
   }
 
-  const availableSectors = useMemo(() => {
-    return SECTORS[format].map((item) => {
-      const parts = item.id.split("+");
-      return { ...item, busy: parts.some((part) => busySectors.includes(part)) };
-    });
-  }, [format, selectedTimes, occupiedByTime]);
+  const availableSectors = SECTORS[format].map((item) => {
+    const parts = item.id.split("+");
+    return { ...item, busy: parts.some((part) => busySectors.includes(part)) };
+  });
 
   function changeFormat(value: FieldFormat) {
     setFormat(value);
@@ -360,7 +358,14 @@ export default function BookingPage() {
         <form className="booking-shell" onSubmit={submit}>
           <section className="arena-location-card">
             <button className="arena-photo-button" onClick={() => setPhotoOpen(true)} type="button">
-              <img src="/arena/arena-aerial-rotated.jpg" alt="AIR ARENA снаружи" />
+              <Image
+                src="/arena/arena-aerial-rotated.jpg"
+                alt="AIR ARENA снаружи"
+                width={1200}
+                height={2133}
+                sizes="(max-width: 760px) 100vw, 380px"
+                priority
+              />
               <span>Нажмите, чтобы рассмотреть</span>
             </button>
             <div>
@@ -615,14 +620,21 @@ export default function BookingPage() {
       </main>
 
       <footer className="site-footer">
-        <span>© 2025 Air Arena</span>
+        <span>© {new Date().getFullYear()} Air Arena</span>
         <span><ShieldCheck size={12} style={{ verticalAlign: "middle", marginRight: 5 }} /> Безопасное бронирование</span>
       </footer>
 
       {photoOpen && (
         <div className="photo-modal" role="dialog" aria-modal="true" aria-label="Фото AIR ARENA" onClick={() => setPhotoOpen(false)}>
           <button className="photo-modal-close" onClick={() => setPhotoOpen(false)} type="button">Закрыть</button>
-          <img src="/arena/arena-aerial-rotated.jpg" alt="AIR ARENA снаружи крупным планом" onClick={(event) => event.stopPropagation()} />
+          <Image
+            src="/arena/arena-aerial-rotated.jpg"
+            alt="AIR ARENA снаружи крупным планом"
+            width={1200}
+            height={2133}
+            sizes="100vw"
+            onClick={(event) => event.stopPropagation()}
+          />
         </div>
       )}
     </>

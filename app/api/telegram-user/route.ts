@@ -8,6 +8,12 @@ type TelegramUpdate = {
   };
 };
 
+function validateSecret(request: NextRequest) {
+  const expected = process.env.TELEGRAM_USER_WEBHOOK_SECRET || process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (!expected) return false;
+  return request.headers.get("x-telegram-bot-api-secret-token") === expected;
+}
+
 function siteUrl() {
   return (
     process.env.SITE_URL ||
@@ -55,6 +61,9 @@ async function handleMessage(update: TelegramUpdate) {
 }
 
 export async function POST(request: NextRequest) {
+  const expected = process.env.TELEGRAM_USER_WEBHOOK_SECRET || process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (!expected) return NextResponse.json({ ok: false }, { status: 503 });
+  if (!validateSecret(request)) return NextResponse.json({ ok: false }, { status: 401 });
   try {
     const update = (await request.json()) as TelegramUpdate;
     await handleMessage(update);

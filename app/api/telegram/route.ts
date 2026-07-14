@@ -12,7 +12,7 @@ type TelegramUpdate = {
 
 function validateSecret(request: NextRequest) {
   const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (!expected) return true;
+  if (!expected) return false;
   return request.headers.get("x-telegram-bot-api-secret-token") === expected;
 }
 
@@ -55,6 +55,9 @@ async function handleMessage(update: TelegramUpdate) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!process.env.TELEGRAM_WEBHOOK_SECRET) {
+    return NextResponse.json({ ok: false }, { status: 503 });
+  }
   if (!validateSecret(request)) {
     return NextResponse.json({ ok: false }, { status: 401 });
   }

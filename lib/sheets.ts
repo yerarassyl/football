@@ -1,7 +1,10 @@
 import { google } from "googleapis";
+import { randomUUID } from "crypto";
 import { conflictMessage, enrichBooking, findBookingConflict } from "./booking";
 import { mockRequests } from "./mock-data";
 import { BookingInput, BookingRequest, PaymentRecord } from "./types";
+
+export type InitialBookingState = Pick<BookingRequest, "status" | "comment">;
 
 const HEADERS = [
   "ID",
@@ -49,9 +52,7 @@ type CacheEntry<T> = {
 };
 
 declare global {
-  // eslint-disable-next-line no-var
   var __airArenaBookingsCache: CacheEntry<BookingRequest[]> | undefined;
-  // eslint-disable-next-line no-var
   var __airArenaTelegramChatsCache: CacheEntry<TelegramChat[]> | undefined;
 }
 
@@ -81,15 +82,12 @@ async function appsScriptRequest<T>(
 ): Promise<T> {
   const url = process.env.GOOGLE_APPS_SCRIPT_URL!;
   const secret = process.env.GOOGLE_APPS_SCRIPT_SECRET!;
-  const response =
-    action === "list"
-      ? await fetch(`${url}?secret=${encodeURIComponent(secret)}`, { cache: "no-store" })
-      : await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({ action, secret, ...payload }),
-          cache: "no-store",
-        });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ action, secret, ...payload }),
+    cache: "no-store",
+  });
 
   if (!response.ok) {
     throw new Error(`Apps Script returned ${response.status}`);
@@ -275,30 +273,30 @@ function forAppsScript(request: BookingRequest): BookingRequest {
   };
 }
 
-function baseRequest(input: BookingInput): BookingRequest {
+function baseRequest(input: BookingInput, initial: Partial<InitialBookingState> = {}): BookingRequest {
   const listPrice = input.listPrice || input.price;
   const salePrice = input.salePrice || input.price;
   const now = new Date().toISOString();
   return enrichBooking({
     ...input,
-    id: `REQ-${Date.now().toString().slice(-6)}`,
+    id: `REQ-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 6).toUpperCase()}`,
     createdAt: now,
     updatedAt: now,
-    confirmedAt: "",
-    cancelledAt: "",
+    confirmedAt: initial.status === "confirmed" ? now : "",
+    cancelledAt: initial.status === "cancelled" ? now : "",
     price: salePrice,
     listPrice,
     salePrice,
     source: input.source || "Сайт",
     sourceDetail: input.sourceDetail || "",
-    status: "new",
+    status: initial.status || "new",
     paymentStatus: "unpaid",
     prepayment: 0,
     balance: salePrice,
     paymentMethod: "Не выбран",
     paymentRecipient: "",
     paidAt: "",
-    comment: "",
+    comment: initial.comment || "",
     deletedAt: "",
     payments: [],
   });
@@ -349,8 +347,7 @@ function ensureNoConflict(existing: BookingRequest[], booking: BookingRequest) {
   if (conflict) throw new BookingConflictError(conflictMessage(conflict));
 }
 
-export async function createRequest(input: BookingInput): Promise<BookingRequest> {
-  const request = baseRequest(input);
+async function persistNewRequest(request: BookingRequest): Promise<BookingRequest> {
   if (isAppsScriptConfigured()) {
     await appsScriptRequest("create", { booking: forAppsScript(request) });
     upsertCachedBooking(request);
@@ -364,11 +361,22 @@ export async function createRequest(input: BookingInput): Promise<BookingRequest
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [toRow(request)] },
   });
+  upsertCachedBooking(request);
   return request;
 }
 
-export async function createRequestIfAvailable(input: BookingInput): Promise<BookingRequest> {
-  const request = baseRequest(input);
+export async function createRequest(
+  input: BookingInput,
+  initial: Partial<InitialBookingState> = {},
+): Promise<BookingRequest> {
+  return persistNewRequest(baseRequest(input, initial));
+}
+
+export async function createRequestIfAvailable(
+  input: BookingInput,
+  initial: Partial<InitialBookingState> = {},
+): Promise<BookingRequest> {
+  const request = baseRequest(input, initial);
 
   if (isAppsScriptConfigured()) {
     const result = await appsScriptRequest<{ booking: BookingRequest }>("createIfAvailable", {
@@ -381,7 +389,7 @@ export async function createRequestIfAvailable(input: BookingInput): Promise<Boo
 
   const existing = await getRequests();
   ensureNoConflict(existing, request);
-  return createRequest(input);
+  return persistNewRequest(request);
 }
 
 export async function updateRequest(

@@ -3,7 +3,14 @@ import { AUTH_COOKIE, verifyAuthToken } from "@/lib/auth";
 import { BookingConflictError, createRequestIfAvailable, getRequests } from "@/lib/sheets";
 import { getSettings } from "@/lib/settings";
 import { notifyAdminsAboutBooking } from "@/lib/telegram";
-import { BookingInput } from "@/lib/types";
+import { clientIp, consumeRateLimit } from "@/lib/rate-limit";
+import {
+  readJsonObject,
+  validateBookingCreate,
+  validateInitialAdminState,
+  validateSalePrice,
+  ValidationError,
+} from "@/lib/validation";
 
 export async function GET(request: NextRequest) {
   if (!verifyAuthToken(request.cookies.get(AUTH_COOKIE)?.value)) {
@@ -20,33 +27,36 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as Partial<BookingInput>;
-    if (!body.date || !body.time || !body.format || !body.sector || !body.name || !body.phone) {
-      return NextResponse.json({ error: "Заполнены не все обязательные поля" }, { status: 400 });
+    const rate = consumeRateLimit(`booking-create:${clientIp(request)}`, 10, 10 * 60_000);
+    if (!rate.allowed) {
+      return NextResponse.json(
+        { error: "Слишком много заявок. Попробуйте позже" },
+        { status: 429, headers: { "Retry-After": String(rate.retryAfter) } },
+      );
     }
 
-    const settings = await getSettings();
-    const duration = Number(body.duration) || 60;
-    if (duration < 60 || duration % 30 !== 0) {
-      return NextResponse.json({ error: "Длительность должна быть от 1 часа с шагом 30 минут" }, { status: 400 });
-    }
-    const hourlyPrice = settings.prices[body.format];
-    const listPrice = Math.round(hourlyPrice * (duration / 60));
+    const body = await readJsonObject(request);
     const isAdmin = verifyAuthToken(request.cookies.get(AUTH_COOKIE)?.value);
-    const salePrice = isAdmin && Number(body.salePrice) > 0 ? Number(body.salePrice) : listPrice;
+    const input = validateBookingCreate(body, { allowPast: isAdmin });
+    const settings = await getSettings();
+    const hourlyPrice = settings.prices[input.format];
+    const listPrice = Math.round(hourlyPrice * (input.duration / 60));
+    const salePrice = isAdmin && body.salePrice !== undefined ? validateSalePrice(body.salePrice) : listPrice;
     const booking = await createRequestIfAvailable({
-      ...(body as BookingInput),
-      duration,
+      ...input,
       listPrice,
       salePrice,
       price: salePrice,
-    });
+    }, isAdmin ? validateInitialAdminState(body) : {});
     void notifyAdminsAboutBooking(booking).catch((error) => {
       console.error("Telegram notification failed", error);
     });
 
     return NextResponse.json(booking, { status: 201 });
   } catch (error) {
+    if (error instanceof ValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     if (error instanceof BookingConflictError) {
       return NextResponse.json({ error: error.message }, { status: 409 });
     }

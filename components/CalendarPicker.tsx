@@ -70,10 +70,10 @@ export default function CalendarPicker({
           <ChevronLeft size={18} />
         </button>
         <div className="calendar-selects">
-          <select value={viewMonth} onChange={(event) => setViewMonth(Number(event.target.value))}>
+          <select aria-label="Месяц" value={viewMonth} onChange={(event) => setViewMonth(Number(event.target.value))}>
             {monthNames.map((month, index) => <option value={index} key={month}>{month}</option>)}
           </select>
-          <select value={viewYear} onChange={(event) => setViewYear(Number(event.target.value))}>
+          <select aria-label="Год" value={viewYear} onChange={(event) => setViewYear(Number(event.target.value))}>
             {years.map((year) => <option key={year}>{year}</option>)}
           </select>
         </div>
@@ -94,6 +94,7 @@ export default function CalendarPicker({
             <button
               className={`${value === iso ? "selected" : ""} ${disabled ? "disabled" : ""}`}
               disabled={disabled}
+              aria-current={value === iso ? "date" : undefined}
               key={iso}
               onClick={() => onChange(iso)}
               type="button"

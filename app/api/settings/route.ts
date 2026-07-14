@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE, verifyAuthToken } from "@/lib/auth";
 import { getSettings, updateSettings } from "@/lib/settings";
+import { readJsonObject, validateSettings, ValidationError } from "@/lib/validation";
 
 export async function GET() {
   const settings = await getSettings();
@@ -13,9 +14,12 @@ export async function PATCH(request: NextRequest) {
   }
 
   try {
-    const settings = await updateSettings(await request.json());
+    const settings = await updateSettings(validateSettings(await readJsonObject(request)));
     return NextResponse.json(settings);
   } catch (error) {
+    if (error instanceof ValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error("Failed to update settings", error);
     return NextResponse.json({ error: "Не удалось сохранить настройки" }, { status: 500 });
   }
