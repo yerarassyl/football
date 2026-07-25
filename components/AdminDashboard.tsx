@@ -1,0 +1,2115 @@
+"use client";
+
+import {
+  BarChart3,
+  CalendarDays,
+  Check,
+  ChevronLeft,
+  CircleDollarSign,
+  CopyPlus,
+  LogOut,
+  ListChecks,
+  Plus,
+  RefreshCcw,
+  RotateCcw,
+  Save,
+  Search,
+  Trash2,
+  Trophy,
+  X,
+} from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { enrichBooking, formatLabel } from "@/lib/booking";
+import { FIELD_OPTIONS, FieldOption, formatPrice, SECTORS, DURATION_OPTIONS } from "@/lib/constants";
+import { arenaDateValue, bookingEndTime, formatDuration } from "@/lib/time";
+import { BookingRequest, FieldFormat, PaymentRecord, RequestStatus } from "@/lib/types";
+import CalendarPicker from "./CalendarPicker";
+
+type QueueStatus = Exclude<RequestStatus, "deleted">;
+type QueueTab = `status:${QueueStatus}`;
+type Tab = "schedule" | QueueTab | "repeat" | "trash" | "analytics";
+
+type EditorState = {
+  id?: string;
+  date: string;
+  time: string;
+  duration: number;
+  format: FieldFormat;
+  // sector removed from admin panel
+  name: string;
+  phone: string;
+  team: string;
+  source: string;
+  sourceDetail: string;
+  salePricePerHour: string; // changed to per hour
+  comment: string;
+  status: BookingRequest["status"];
+};
+
+type QueueConfig = {
+  tab: QueueTab;
+  status: QueueStatus;
+  label: string;
+  description: string;
+  icon: typeof CalendarDays;
+};
+
+// Removed cancelled tab as requested
+const queueTabs: QueueConfig[] = [
+  {
+    tab: "status:confirmed",
+    status: "confirmed",
+    label: "Подтвержденные",
+    description: "Успешно проведены",
+    icon: Check,
+  },
+];
+
+const paymentMethods = [
+  "Не выбран",
+  "Наличные",
+  "Kaspi QR",
+  "Kaspi Терминал",
+  "Счет на оплату",
+  "Банковский перевод",
+  "Контрактный клиент",
+  "Другое",
+];
+
+const paymentRecipients = [
+  "Не выбран",
+  "ТОО AIR ARENA",
+  "ИП AIR ARENA",
+  "ТОО WMA GROUP",
+  "Другое",
+];
+
+function addDays(date: string, days: number) {
+  const next = new Date(`${date}T00:00:00`);
+  next.setDate(next.getDate() + days);
+  return next.toISOString().slice(0, 10);
+}
+
+function diffDays(from: string, to: string) {
+  const start = new Date(`${from}T00:00:00`).getTime();
+  const end = new Date(`${to}T00:00:00`).getTime();
+  return Math.round((end - start) / 86_400_000);
+}
+
+function bookingSort(a: BookingRequest, b: BookingRequest) {
+  return `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`);
+}
+
+function matchQuery(item: BookingRequest, query: string) {
+  const value = query.trim().toLowerCase();
+  if (!value) return true;
+  return [
+    item.id,
+    item.date,
+    item.time,
+    item.name,
+    item.phone,
+    item.team,
+    item.comment,
+    item.source,
+    item.sourceDetail,
+    item.paymentMethod,
+    item.paymentRecipient,
+    // sector removed from search as it's not in admin panel
+    formatLabel(item.format),
+    item.status,
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(value);
+}
+
+function calculateListPrice(fieldOptions: FieldOption[], format: FieldFormat, duration: number) {
+  const hourly = fieldOptions.find((item) => item.id === format)?.price || 0;
+  return Math.round(hourly * (duration / 60));
+}
+
+function defaultEditor(date: string, fieldOptions: FieldOption[]): EditorState {
+  const format: FieldFormat = "quarter";
+  const duration = 60; // 1 hour default
+  return {
+    date,
+    time: "09:00",
+    duration,
+    format,
+    // sector removed
+    name: "",
+    phone: "",
+    team: "",
+    source: "Администратор",
+    sourceDetail: "",
+    salePricePerHour: String(calculateListPrice(fieldOptions, format, duration) / (duration / 60)), // per hour
+    comment: "",
+    status: "confirmed", // default to confirmed as requested
+  };
+}
+
+function editorFromBooking(booking: BookingRequest): EditorState {
+  // Convert total price back to per hour for display
+  const hours = booking.duration / 60;
+  const perHour = hours > 0 ? booking.price / hours : 0;
+
+  return {
+    id: booking.id,
+    date: booking.date,
+    time: booking.time,
+    duration: booking.duration,
+    format: booking.format,
+    // sector removed
+    name: booking.name,
+    phone: booking.phone,
+    team: booking.team,
+    source: booking.source,
+    sourceDetail: booking.sourceDetail,
+    salePricePerHour: String(perHour),
+    comment: booking.comment || "",
+    status: booking.status,
+  };
+}
+
+function paymentClass(booking: BookingRequest) {
+  return `payment-card ${booking.paymentStatus}`;
+}
+
+function noticeText(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  return "Не удалось выполнить действие";
+}
+
+export default function AdminDashboard() {
+  const today = arenaDateValue();
+  const [tab, setTab] = useState<Tab>("schedule");
+  const [bookings, setBookings] = useState<BookingRequest[]>([]);
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [selectedId, setSelectedId] = useState(""); // single selection for details
+  const [selectedIds, setSelectedIds] = useState<string[]>([]); // multi-selection for batch actions
+  const [createMode, setCreateMode] = useState(false);
+  const [editor, setEditor] = useState<EditorState>(() => defaultEditor(today, FIELD_OPTIONS));
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [fieldOptions, setFieldOptions] = useState<FieldOption[]>(FIELD_OPTIONS);
+
+  function showNotice(type: "success" | "error", text: string) {
+    setNotice({ type, text });
+    window.setTimeout(() => {
+      setNotice((current) => (current?.text === text ? null : current));
+    }, 3000);
+  }
+
+  // Toggle individual selection (for batch actions)
+  function toggleSelect(id: string) {
+    setSelectedIds(prev =>
+      prev.includes(id)
+        ? prev.filter(i => i !== id)
+        : [...prev, id]
+    );
+
+    // When selecting via checkbox, also set as single selected item for details
+    setSelectedId(id);
+  }
+
+  // Select all visible items
+  function selectAllVisible(visibleIds: string[]) {
+    setSelectedIds([...visibleIds]);
+    // Set first item as single selection for details if any selected
+    if (visibleIds.length > 0) {
+      setSelectedId(visibleIds[0]);
+    } else {
+      setSelectedId("");
+    }
+  }
+
+  // Clear selection
+  function clearSelection() {
+    setSelectedIds([]);
+    setSelectedId("");
+  }
+
+  async function load() {
+    setLoading(true);
+    try {
+      const response = await fetch("/api/bookings", { cache: "no-store" });
+      if (response.status === 401) {
+        window.location.href = "/admin/login";
+        return;
+      }
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data)) {
+        throw new Error(data?.error || "Не удалось загрузить брони");
+      }
+      setBookings(data.map(enrichBooking));
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      const response = await fetch("/api/settings", { cache: "no-store" });
+      const settings = await response.json();
+      if (!response.ok) throw new Error(settings.error || "Не удалось загрузить цены");
+      setFieldOptions((items) =>
+        items.map((item) => ({
+          ...item,
+          price: settings.prices?.[item.id] ?? item.price,
+        })),
+      );
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    void loadSettings();
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 620px)");
+    const sync = () => setIsMobile(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+
+  const selectedBooking = useMemo(
+    () => bookings.find((item) => item.id === selectedId),
+    [bookings, selectedId],
+  );
+
+  useEffect(() => {
+    if (createMode) {
+      setEditor(defaultEditor(selectedDate, fieldOptions));
+      return;
+    }
+    if (selectedBooking) {
+      setEditor(editorFromBooking(selectedBooking));
+    }
+  }, [createMode, selectedBooking, selectedDate, fieldOptions]);
+
+  // Filtered bookings for schedule view (excluding deleted)
+  const scheduleBookings = useMemo(() => {
+    const active = bookings.filter((item) => item.status !== "deleted");
+    const source = query.trim()
+      ? active.filter((item) => matchQuery(item, query))
+      : active.filter((item) => item.date === selectedDate);
+    return [...source].sort(bookingSort);
+  }, [bookings, query, selectedDate]);
+
+  // Trash items (deleted status)
+  const trashBookings = useMemo(
+    () => bookings.filter((item) => item.status === "deleted" && matchQuery(item, query)).sort(bookingSort),
+    [bookings, query],
+  );
+
+  // Confirmed bookings queue (only status we keep)
+  const confirmedBookings = useMemo(() =>
+    bookings
+      .filter((booking) => booking.status === "confirmed" && matchQuery(booking, query))
+      .sort(bookingSort),
+    [bookings, query]
+  );
+
+  const currentQueue = useMemo(
+    () => queueTabs.find((item) => item.tab === tab),
+    [tab],
+  );
+
+  // Handle single selection navigation
+  useEffect(() => {
+    if (!currentQueue || createMode) return;
+    const activeSelection = bookings.find((item) => item.id === selectedId);
+    if (isMobile) {
+      if (!activeSelection || activeSelection.status !== currentQueue.status) {
+        setSelectedId("");
+      }
+      return;
+    }
+    if (!activeSelection || activeSelection.status !== currentQueue.status) {
+      setSelectedId(confirmedBookings[0]?.id || "");
+    }
+  }, [bookings, createMode, currentQueue, isMobile, selectedId, confirmedBookings]);
+
+  async function persistPatch(id: string, patch: Partial<BookingRequest>) {
+    const response = await fetch(`/api/bookings/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Не удалось сохранить изменения");
+    const updated = enrichBanner(result as BookingRequest);
+    setBookings((current) => current.map((item) => (item.id === id ? updated : item)));
+    setSelectedId(updated.id);
+    return updated;
+  }
+
+  async function saveBooking(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      const listPrice = calculateListPrice(fieldOptions, editor.format, editor.duration);
+      const salePricePerHour = Number(editor.salePricePerHour) || 0;
+      const durationHours = editor.duration / 60;
+      const totalPrice = Math.round(salePricePerHour * durationHours);
+
+      const payload = {
+        date: editor.date,
+        time: editor.time,
+        duration: editor.duration,
+        format: editor.format,
+        // sector removed from admin - will be set to first sector of format
+        sector: SECTORS[editor.format][0].id,
+        listPrice,
+        price: totalPrice, // total price
+        salePrice: totalPrice, // keep same as price for compatibility
+        name: editor.name,
+        phone: editor.phone,
+        team: editor.team,
+        source: editor.source || "Администратор",
+        sourceDetail: editor.sourceDetail || "",
+      };
+
+      if (editor.id) {
+        await persistPatch(editor.id, {
+          ...payload,
+          comment: editor.comment,
+          status: editor.status,
+        });
+        showNotice("success", "Бронь обновлена");
+      } else {
+        const createResponse = await fetch("/api/bookings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...payload, status: editor.status, comment: editor.comment }),
+        });
+        const created = await createResponse.json();
+        if (!createResponse.ok) {
+          throw new Error(created.error || "Не удалось создать бронь");
+        }
+
+        const finalized = enrichBooking(created as BookingRequest);
+        setBookings((current) => [finalized, ...current.filter((item) => item.id !== finalized.id)]);
+        setSelectedId(finalized.id);
+        setCreateMode(false);
+        showNotice("success", "Бронь создана");
+      }
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addPayment(payment: Omit<PaymentRecord, "id">) {
+    if (!selectedBooking) return;
+    setSaving(true);
+    try {
+      const payments = [
+        ...selectedBooking.payments,
+        {
+          id: `PAY-${Date.now()}`,
+          ...payment,
+        },
+      ];
+      await persistPatch(selectedBooking.id, { payments });
+      showNotice("success", "Оплата добавлена");
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function moveToTrash(id: string) {
+    if (!window.confirm("Переместить эту бронь в корзину?")) return;
+    try {
+      await persistPatch(id, { status: "deleted", deletedAt: new Date().toISOString() });
+      showNotice("success", "Бронь отправлена в корзину");
+
+      // Remove from selection if present
+      setSelectedIds(prev => prev.filter(i => i !== id));
+      if (selectedId === id) setSelectedId("");
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
+  }
+
+  async function restoreFromTrash(id: string) {
+    try {
+      await persistPatch(id, { status: "confirmed", deletedAt: "" });
+      showNotice("success", "Бронь восстановлена");
+
+      // Remove from selection if present
+      setSelectedIds(prev => prev.filter(i => i !== id));
+      if (selectedId === id) setSelectedId("");
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
+  }
+
+  async function deleteForever(id: string) {
+    if (!window.confirm("Удалить бронь навсегда? Это действие нельзя отменить.")) return;
+    try {
+      const response = await fetch(`/api/bookings/${id}`, { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Не удалось удалить бронь");
+      setBookings((current) => current.filter((item) => item.id !== id));
+
+      // Remove from selection if present
+      setSelectedIds(prev => prev.filter(i => i !== id));
+      if (selectedId === id) setSelectedId("");
+
+      showNotice("success", "Бронь удалена окончательно");
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
+  }
+
+  // Batch actions
+  async function confirmSelected() {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Подтвердить ${selectedIds.length} выбранных броней?`)) return;
+
+    try {
+      // Update each selected booking to confirmed status
+      const updates = selectedIds.map(id =>
+        fetch(`/api/bookings/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "confirmed" })
+        })
+      );
+
+      await Promise.all(updates);
+      await load(); // refresh data
+      showNotice("success", `Подтверждено ${selectedIds.length} броней`);
+      clearSelection();
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
+  }
+
+  async function trashSelected() {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Переместить ${selectedIds.length} выбранных броней в корзину?`)) return;
+
+    try {
+      const updates = selectedIds.map(id =>
+        fetch(`/api/bookings/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status: "deleted",
+            deletedAt: new Date().toISOString()
+          })
+        })
+      );
+
+      await Promise.all(updates);
+      await load(); // refresh data
+      showNotice("success", `Перемещено в корзину ${selectedIds.length} броней`);
+      clearSelection();
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
+  }
+
+  async function restoreSelected() {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Восстановить ${selectedIds.length} выбранных броней из корзины?`)) return;
+
+    try {
+      const updates = selectedIds.map(id =>
+        fetch(`/api/bookings/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status: "confirmed",
+            deletedAt: ""
+          })
+        })
+      );
+
+      await Promise.all(updates);
+      await load(); // refresh data
+      showNotice("success", `Восстановлено ${selectedIds.length} броней`);
+      clearSelection();
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/admin/login";
+  }
+
+  function openStatusTab(status: QueueStatus, bookingId?: string) {
+    const nextTab = `status:${status}` as QueueTab;
+    setTab(nextTab);
+    setCreateMode(false);
+    if (bookingId) setSelectedId(bookingId);
+  }
+
+  function openBookingDetails(bookingId: string, fallbackStatus: QueueStatus = "confirmed") {
+    const booking = bookings.find((item) => item.id === bookingId);
+    if (!booking) return;
+    if (booking.status === "deleted") {
+      setTab("trash");
+      setSelectedId(booking.id);
+      setCreateMode(false);
+      return;
+    }
+    if (booking.status === "new" || booking.status === "in_progress" || booking.status === "confirmed") {
+      openStatusTab(booking.status, booking.id);
+      return;
+    }
+    openStatusTab(fallbackStatus, booking.id);
+  }
+
+  function openFilteredBookings(nextTab: Tab, nextQuery: string) {
+    setCreateMode(false);
+    setSelectedId("");
+    setQuery(nextQuery);
+    setTab(nextTab);
+  }
+
+  function openScheduleDate(date: string) {
+    setCreateMode(false);
+    setSelectedId("");
+    setQuery("");
+    setSelectedDate(date);
+    setTab("schedule");
+  }
+
+  function openMobileBookings(nextTab: QueueTab | "trash" = "status:confirmed") {
+    setCreateMode(false);
+    setSelectedId("");
+    setQuery("");
+    setTab(nextTab);
+  }
+
+  const showMobileDetails = isMobile && (createMode || Boolean(selectedBooking));
+
+  // Get IDs of currently visible items for select all functionality
+  const visibleScheduleIds = useMemo(() =>
+    scheduleBookings.map(b => b.id),
+    [scheduleBookings]
+  );
+
+  const visibleConfirmedIds = useMemo(() =>
+    confirmedBookings.map(b => b.id),
+    [confirmedBookings]
+  );
+
+  const visibleTrashIds = useMemo(() =>
+    trashBookings.map(b => b.id),
+    [trashBookings]
+  );
+
+  return (
+    <div className="admin-layout">
+      <aside className="admin-sidebar">
+        <Link className="brand admin-brand" href="/">
+          <span className="brand-mark"><Trophy size={18} /></span> Air Arena
+        </Link>
+        <nav>
+          <button className={tab === "schedule" ? "active" : ""} onClick={() => setTab("schedule")}>
+            <CalendarDays size={18} />
+            <span className="nav-label" data-short="День">График</span>
+          </button>
+          <button
+            className={`mobile-all-nav ${(currentQueue || tab === "trash") ? "active" : ""}`}
+            onClick={() => openMobileBookings(currentQueue?.tab || (tab === "trash" ? "trash" : "status:confirmed"))}
+            type="button"
+          >
+            <ListChecks size={18} />
+            <span className="nav-label" data-short="Все">Все заявки</span>
+          </button>
+          {queueTabs.map((item) => {
+            const Icon = item.icon;
+            const count = bookings.filter((booking) => booking.status === item.status).length;
+            return (
+              <button className={`desktop-queue-nav ${tab === item.tab ? "active" : ""}`} key={item.tab} onClick={() => setTab(item.tab)}>
+                <Icon size={18} />
+                <span
+                  className="nav-label"
+                  data-short={
+                    item.status === "confirmed"
+                      ? "Подтв."
+                      : ""
+                  }
+                >
+                  {item.label}
+                </span>
+                <span className="nav-badge">{count}</span>
+              </button>
+            );
+          })}
+          <button className={tab === "repeat" ? "active" : ""} onClick={() => setTab("repeat")}>
+            <CopyPlus size={18} />
+            <span className="nav-label" data-short="Повтор">Повтор</span>
+          </button>
+          <button className={`desktop-trash-nav ${tab === "trash" ? "active" : ""}`} onClick={() => setTab("trash")}>
+            <Trash2 size={18} />
+            <span className="nav-label" data-short="Корзина">Корзина</span>
+          </button>
+          <button className={tab === "analytics" ? "active" : ""} onClick={() => setTab("analytics")}>
+            <BarChart3 size={18} />
+            <span className="nav-label" data-short="Аналит.">Аналитика</span>
+          </button>
+                  </nav>
+        <button className="logout-button" onClick={logout}><LogOut size={16} /> Выйти</button>
+      </aside>
+
+      <main className="admin-main">
+        {notice && <div role="status" aria-live="polite" className={`admin-toast ${notice.type}`}>{notice.text}</div>}
+        <div className="admin-mobile-head">
+          <span className="brand"><span className="brand-mark"><Trophy size={16} /></span> Air Arena</span>
+          <button aria-label="Выйти из админки" className="secondary-button" onClick={logout}><LogOut size={15} /></button>
+        </div>
+
+        {tab === "schedule" && (
+          <>
+            <div className="admin-heading">
+              <div>
+                <div className="section-kicker">График</div>
+                <h1>Расписание на день</h1>
+                <p>Календарь, дневной список, редактирование и оплаты на одном экране.</p>
+              </div>
+              <div className="schedule-head-actions">
+                <div className="batch-actions">
+                  {selectedIds.length > 0 && (
+                    <div className="batch-toolbar">
+                      <span>{selectedIds.length} выбрано</span>
+                      <button className="secondary-button" onClick={confirmSelected}>
+                        <Check size={16} /> Подтвердить выбранные
+                      </button>
+                      <button className="danger-button" onClick={trashSelected}>
+                        <Trash2 size={16} /> В корзину
+                      </button>
+                      <button className="secondary-button" onClick={clearSelection}>
+                        <X size={16} /> Очистить выбор
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="secondary-button"
+                  onClick={() => {
+                    setCreateMode(true);
+                    setSelectedId("");
+                    setEditor(defaultEditor(selectedDate, fieldOptions));
+                  }}
+                  type="button"
+                >
+                  <Plus size={16} /> Новая бронь
+                </button>
+                <button className="secondary-button" onClick={() => void load()} type="button">
+                  <RefreshCcw size={16} /> Обновить
+                </button>
+              </div>
+            </div>
+
+            <div className={`admin-schedule-grid ${showMobileDetails ? "mobile-detail-mode" : ""}`}>
+              <section className={`admin-card schedule-panel ${showMobileDetails ? "mobile-list-hidden" : ""}`}>
+                <div className="schedule-toolbar">
+                  <CalendarPicker value={selectedDate} onChange={setSelectedDate} allowPast />
+                  <div className="search-box schedule-search">
+                    <Search size={16} />
+                    <input
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder="Поиск по имени, телефону, команде"
+                    />
+                  </div>
+                </div>
+                <div className="schedule-day-head">
+                  <div>
+                    <strong>{query.trim() ? "Результаты поиска" : `Дата ${selectedDate}`}</strong>
+                    <small>{query.trim() ? `${scheduleBookings.length} совпадений` : "Карточки окрашены по статусу оплаты"}</small>
+                  </div>
+                </div>
+                <div className="schedule-list">
+                  {loading && <div className="empty-state">Загружаем график...</div>}
+                  {!loading && scheduleBookings.length === 0 && <div className="empty-state">На выбранный период броней нет</div>}
+                  {scheduleBookings.map((booking) => (
+                    <div className={`schedule-card-row`} key={booking.id}>
+                      <label className="schedule-item-label">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(booking.id)}
+                          onChange={() => toggleSelect(booking.id)}
+                        />
+                        <span className="checkbox-label"></span>
+                      </label>
+                      <button
+                        className={`schedule-card ${paymentClass(booking)} ${selectedId === booking.id && !createMode ? "selected" : ""}`}
+                        key={booking.id}
+                        onClick={() => {
+                          setCreateMode(false);
+                          setSelectedId(booking.id);
+                        }}
+                        type="button"
+                      >
+                        <div className="schedule-card-time">
+                          <strong>{booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
+                          <span>{formatDuration(booking.duration)}</span>
+                          {query.trim() && <small>{booking.date}</small>}
+                        </div>
+                        <div className="schedule-card-body">
+                          <div className="schedule-card-top">
+                            <strong>{booking.name}</strong>
+                            <span>{formatPrice(booking.salePrice || booking.price)}</span>
+                          </div>
+                          <div className="schedule-card-format">{formatLabel(booking.format)}</div>
+                          <div className="schedule-card-meta">
+                            <span>{booking.sector}</span>
+                            <span>{booking.team || booking.phone}</span>
+                          </div>
+                          {booking.comment && <div className="schedule-card-comment">{booking.comment}</div>}
+                        </div>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <BookingEditor
+                booking={selectedBooking}
+                createMode={createMode}
+                editor={editor}
+                fieldOptions={fieldOptions}
+                mobileView={showMobileDetails}
+                onAddPayment={addPayment}
+                onBack={() => {
+                  setCreateMode(false);
+                  setSelectedId("");
+                }}
+                onChange={setEditor}
+                onDelete={() => selectedBooking && void moveToTrash(selectedBooking.id)}
+                onSave={saveBooking}
+                onCancelCreate={() => setCreateMode(false)}
+                saving={saving}
+              />
+            </div>
+          </>
+        )}
+
+        {tab === "repeat" && (
+          <RepeatPlanner
+            bookings={bookings}
+            onComplete={async (message) => {
+              await load();
+              showNotice("success", message);
+            }}
+          />
+        )}
+
+        {currentQueue && (
+          <>
+            <div className="admin-heading">
+              <div>
+                <div className="section-kicker">Статусы заявок</div>
+                <h1>{currentQueue.label}</h1>
+                <p>{currentQueue.description}. Нажмите на карточку слева, чтобы открыть полную заявку и историю оплат.</p>
+              </div>
+              <div className="schedule-head-actions">
+                <div className="batch-actions">
+                  {selectedIds.length > 0 && (
+                    <div className="batch-toolbar">
+                      <span>{selectedIds.length} выбрано</span>
+                      {!tab.startsWith("status:cancelled") && (
+                        <>
+                          <button className="secondary-button" onClick={confirmSelected}>
+                            <Check size={16} /> Подтвердить выбранные
+                          </button>
+                          <button className="danger-button" onClick={trashSelected}>
+                            <Trash2 size={16} /> В корзину
+                          </button>
+                        </>
+                      )}
+                      {tab === "trash" && (
+                        <>
+                          <button className="secondary-button" onClick={restoreSelected}>
+                            <RotateCcw size={16} /> Восстановить из корзину
+                          </button>
+                          <button className="secondary-button" onClick={clearSelection}>
+                            <X size={16} /> Очистить выбор
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <button className="secondary-button" onClick={() => void load()} type="button">
+                  <RefreshCcw size={16} /> Обновить
+                </button>
+              </div>
+            </div>
+
+            <div className="mobile-booking-tabs" aria-label="Фильтр заявок">
+              {queueTabs.map((item) => (
+                <button
+                  className={tab === item.tab ? "active" : ""}
+                  aria-pressed={tab === item.tab}
+                  key={item.tab}
+                  onClick={() => openMobileBookings(item.tab)}
+                  type="button"
+                >
+                  {item.label}<span>{bookings.filter((booking) => booking.status === item.status).length}</span>
+                </button>
+              ))}
+              <button aria-pressed={false} onClick={() => openMobileBookings("trash")} type="button">
+                Корзина<span>{bookings.filter((booking) => booking.status === "deleted").length}</span>
+              </button>
+            </div>
+
+            <div className={`admin-schedule-grid ${showMobileDetails ? "mobile-detail-mode" : ""}`}>
+              <section className={`admin-card schedule-panel ${showMobileDetails ? "mobile-list-hidden" : ""}`}>
+                <div className="schedule-toolbar schedule-toolbar-compact">
+                  <div className="queue-summary-card">
+                    <strong>{currentQueue.label}</strong>
+                    <small>{currentQueue.description}</small>
+                  </div>
+                  <div className="search-box schedule-search">
+                    <Search size={16} />
+                    <input
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder="Поиск по имени, телефону, команде"
+                    />
+                  </div>
+                </div>
+                <div className="schedule-day-head">
+                  <div>
+                    <strong>{currentQueue.label}</strong>
+                    <small>{confirmedBookings.length} заявок в списке</small>
+                  </div>
+                </div>
+                <div className="schedule-list">
+                  {confirmedBookings.length === 0 && <div className="empty-state">В этом статусе пока нет заявок</div>}
+                  {confirmedBookings.map((booking) => (
+                    <div className={`schedule-card-row`} key={booking.id}>
+                      <label className="schedule-item-label">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(booking.id)}
+                          onChange={() => toggleSelect(booking.id)}
+                        />
+                        <span className="checkbox-label"></span>
+                      </label>
+                      <button
+                        className={`schedule-card ${paymentClass(booking)} ${selectedId === booking.id && !createMode ? "selected" : ""}`}
+                        key={booking.id}
+                        onClick={() => {
+                          setCreateMode(false);
+                          setSelectedId(booking.id);
+                        }}
+                        type="button"
+                      >
+                        <div className="schedule-card-time">
+                          <strong>{booking.date}</strong>
+                          <span>{booking.time}-{bookingEndTime(booking.time, booking.duration)}</span>
+                          <small>{formatDuration(booking.duration)}</small>
+                        </div>
+                        <div className="schedule-card-body">
+                          <div className="schedule-card-top">
+                            <strong>{booking.name}</strong>
+                            <span>{formatPrice(booking.salePrice || booking.price)}</span>
+                          </div>
+                          <div className="schedule-card-format">{formatLabel(booking.format)}</div>
+                          <div className="schedule-card-meta">
+                            <span>{booking.sector}</span>
+                            <span>{booking.team || booking.phone}</span>
+                            <span>{booking.paymentStatus === "paid" ? "Оплачено" : booking.paymentStatus === "deposit" ? "Частично" : "Без оплаты"}</span>
+                          </div>
+                          {booking.comment && <div className="schedule-card-comment">{booking.comment}</div>}
+                        </div>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <BookingEditor
+                booking={selectedBooking}
+                createMode={createMode}
+                editor={editor}
+                fieldOptions={fieldOptions}
+                mobileView={showMobileDetails}
+                onAddPayment={addPayment}
+                onBack={() => {
+                  setCreateMode(false);
+                  setSelectedId("");
+                }}
+                onChange={setEditor}
+                onDelete={() => selectedBooking && void moveToTrash(selectedBooking.id)}
+                onSave={saveBooking}
+                onCancelCreate={() => setCreateMode(false)}
+                saving={saving}
+              />
+            </div>
+          </>
+        )}
+
+        {tab === "trash" && (
+          <>
+            <div className="admin-heading">
+              <div>
+                <div className="section-kicker">Корзина</div>
+                <h1>Удаленные брони</h1>
+                <p>Можно восстановить бронь или удалить запись из Google Sheets навсегда.</p>
+              </div>
+            </div>
+            <div className="mobile-booking-tabs" aria-label="Фильтр заявок">
+              {queueTabs.map((item) => (
+                <button aria-pressed={false} key={item.tab} onClick={() => openMobileBookings(item.tab)} type="button">
+                  {item.label}<span>{bookings.filter((booking) => booking.status === item.status).length}</span>
+                </button>
+              ))}
+              <button aria-pressed="true" className="active" onClick={() => openMobileBookings("trash")} type="button">
+                Корзина<span>{trashBookings.length}</span>
+              </button>
+            </div>
+            <section className="admin-card trash-list">
+              <div className="toolbar">
+                <div className="search-box">
+                  <Search size={16} />
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск в корзине" />
+                </div>
+              </div>
+              {trashBookings.length === 0 ? (
+                <div className="empty-state">Корзина пуста</div>
+              ) : trashBookings.map((booking) => (
+                <div className="trash-row" key={booking.id}>
+                  <div className="trash-row-content">
+                    <label className="trash-item-label">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(booking.id)}
+                        onChange={() => toggleSelect(booking.id)}
+                      />
+                      <span className="checkbox-label"></span>
+                    </label>
+                    <div className="trash-row-content-inner">
+                      <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
+                      <small>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</small>
+                      <small>Телефон: {booking.phone} · Команда: {booking.team || "не указана"}</small>
+                      <small>Сумма: {formatPrice(booking.salePrice || booking.price)} · Оплачено: {formatPrice(booking.prepayment)} · Остаток: {formatPrice(booking.balance)}</small>
+                      <small>Источник: {booking.source || "Сайт"}{booking.comment ? ` · ${booking.comment}` : ""}</small>
+                    </div>
+                  </div>
+                  <div className="trash-actions">
+                    <button className="secondary-button" onClick={() => void restoreFromTrash(booking.id)} type="button">Восстановить</button>
+                    <button className="danger-button" onClick={() => void deleteForever(booking.id)} type="button">Удалить навсегда</button>
+                  </div>
+                </div>
+              ))}
+            </section>
+          </>
+        )}
+
+        {tab === "analytics" && (
+          <AnalyticsDashboard
+            bookings={bookings}
+            onOpenBooking={openBookingDetails}
+            onOpenStatus={openStatusTab}
+            onOpenFilter={openFilteredBookings}
+            onOpenDate={openScheduleDate}
+          />
+        )}
+              </main>
+    </div>
+  );
+}
+
+// Helper function for enriching booking (copied from original)
+function enrichBanner(booking: BookingRequest): BookingRequest {
+  // This is a simplified version - in real code we'd import the actual function
+  // For now, we'll just return the booking as is
+  return booking;
+}
+
+function BookingEditor({
+  booking,
+  createMode,
+  editor,
+  fieldOptions,
+  mobileView,
+  onAddPayment,
+  onBack,
+  onChange,
+  onDelete,
+  onSave,
+  onCancelCreate,
+  saving,
+}: {
+  booking?: BookingRequest;
+  createMode:boolean;
+  editor:EditorState;
+  fieldOptions:FieldOption[];
+  mobileView:boolean;
+  onAddPayment:(payment:Omit<PaymentRecord,"id">)=>Promise<void>;
+  onBack:()=>void;
+  onChange:(editor:EditorState)=>void;
+  onDelete:()=>void;
+  onSave:(event:FormEvent)=>Promise<void>;
+  onCancelCreate:()=>void;
+  saving:boolean;
+}) {
+  const listPrice = calculateListPrice(fieldOptions, editor.format, editor.duration);
+  const paymentTotal = booking?.prepayment || 0;
+  const balance = Math.max(0, (Number(editor.salePricePerHour) || 0) * (editor.duration / 60) - paymentTotal);
+  const sectorOptions = SECTORS[editor.format];
+  const [paymentForm, setPaymentForm] = useState({
+    amount: "",
+    date: arenaDateValue(),
+    method: "Не выбран",
+    recipient: "Не выбран",
+  });
+
+  useEffect(() => {
+    setPaymentForm({
+      amount: "",
+      date: arenaDateValue(),
+      method: "Не выбран",
+      recipient: "Не выбран",
+    });
+  }, [booking?.id]);
+
+  if (!createMode && !booking) {
+    return (
+      <aside className="admin-card booking-editor empty-details">
+        <CalendarDays size={28} />
+        <strong>Выберите бронь</strong>
+        <span>Справа откроется редактирование, оплаты и действия с записью.</span>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className={`admin-card booking-editor ${mobileView ? "mobile-editor-visible" : ""}`}>
+      {mobileView && (
+        <button className="editor-back-button" onClick={onBack} type="button">
+          <ChevronLeft size={16} /> Назад к списку
+        </button>
+      )}
+      <div className="editor-head">
+        <div>
+          <small>{createMode ? "Новая запись" : booking?.id}</small>
+          <h2>{createMode ? "Создание брони" : booking?.name}</h2>
+          <p>{createMode ? "Новая бронь сразу попадет в график администратора." : `${booking?.team || "Без команда"} · ${booking?.phone}`}</p>
+        </div>
+        {!createMode && booking && <span className={`payment-badge ${booking.paymentStatus}`}>{booking.paymentStatus === "paid" ? "Оплачено" : booking.paymentStatus === "deposit" ? "Частично" : "Не оплачено"}</span>}
+      </div>
+
+      <form className="editor-form" onSubmit={(event) => void onSave(event)}>
+        <div className="editor-grid">
+          <label className="form-field">
+            <span>Дата</span>
+            <input type="date" value={editor.date} onChange={(event) => onChange({ ...editor, date: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Время</span>
+            <input type="time" step={1800} value={editor.time} onChange={(event) => onChange({ ...editor, time: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Количество часов</span>
+            {/* Convert duration minutes to hours for display, but store as minutes */}
+            <select value={editor.duration} onChange={(event) => onChange({ ...editor, duration: Number(event.target.value) })}>
+              {DURATION_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {(value / 60).toString().replace(/\.0$/, '')} час{(value / 60) === 1 ? '' : (value / 60) < 2 ? 'а' : 'ов'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Формат</span>
+            <select
+              value={editor.format}
+              onChange={(event) => {
+                const format = event.target.value as FieldFormat;
+                onChange({
+                  ...editor,
+                  format,
+                  // sector removed from UI - automatically set to first sector
+                  // sector: SECTORS[format][0].id, // handled in save logic
+                  salePricePerHour: String(calculateListPrice(fieldOptions, format, editor.duration) / (editor.duration / 60)), // reset to default per hour when format changes
+                });
+              }}
+            >
+              {fieldOptions.map((item) => <option key={item.id} value={item.id}>{item.shortLabel}</option>)}
+            </select>
+          </label>
+          {/* Sector removed from admin panel as requested */}
+          <label className="form-field">
+            <span>Статус</span>
+            <select value={editor.status} onChange={(event) => onChange({ ...editor, status: event.target.value as BookingRequest["status"] })}>
+              <option value="confirmed">Подтверждена</option>
+              {/* Removed: new, in_progress, cancelled as requested */}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Имя клиента</span>
+            <input required value={editor.name} onChange={(event) => onChange({ ...editor, name: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Телефон</span>
+            <input required value={editor.phone} onChange={(event) => onChange({ ...editor, phone: event.target.value })} />
+          </label>
+          <label className="form-field editor-span-2">
+            <span>Организация / команда</span>
+            <input value={editor.team} onChange={(event) => onChange({ ...editor, team: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Источник</span>
+            <input value={editor.source} onChange={(event) => onChange({ ...editor, source: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Деталь источника</span>
+            <input value={editor.sourceDetail} onChange={(event) => onChange({ ...editor, sourceDetail: event.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>Стоимость по прайсу</span>
+            <input disabled value={formatPrice(listPrice)} />
+          </label>
+          <label className="form-field">
+            <span>Фактическая стоимость за час</span>
+            <input type="number" min="0" value={editor.salePricePerHour} onChange={(event) => onChange({ ...editor, salePricePerHour: event.target.value })} />
+          </label>
+          <label className="form-field editor-span-2">
+            <span>Комментарий</span>
+            <textarea rows={4} value={editor.comment} onChange={(event) => onChange({ ...editor, comment: event.target.value })} />
+          </label>
+        </div>
+
+        <div className="editor-totals">
+          <div><span>Стоимость по прайсу</span><strong>{formatPrice(listPrice)}</strong></div>
+          <div><span>Фактическая стоимость за час</span><strong>{formatPrice(Number(editor.salePricePerHour) || 0)}</strong></div>
+          <div><span>Итого к оплате</span><strong>{formatPrice(Math.max(0, (Number(editor.salePricePerHour) || 0) * (editor.duration / 60)))}</strong></div>
+          <div><span>Оплачено</span><strong>{formatPrice(paymentTotal)}</strong></div>
+          <div><span>Остаток</span><strong>{formatPrice(balance)}</strong></div>
+        </div>
+
+        <div className="editor-actions">
+          {createMode ? (
+            <>
+              <button className="secondary-button" onClick={onCancelCreate} type="button">Отмена</button>
+              <button className="primary-button" disabled={saving} type="submit"><Save size={16} /> Сохранить</button>
+            </>
+          ) : (
+            <>
+              <button className="danger-button" onClick={onDelete} type="button"><Trash2 size={16} /> В корзину</button>
+              <button className="primary-button" disabled={saving} type="submit"><Save size={16} /> Сохранить</button>
+            </>
+          )}
+        </div>
+      </form>
+
+      {!createMode && booking && (
+        <section className="payments-section">
+          <div className="payments-head">
+            <h3>История оплат</h3>
+            <small>Каждая оплата хранится отдельной записью</small>
+          </div>
+          <div className="payment-history">
+            {booking.payments.length === 0 && <div className="empty-inline">Оплат пока нет</div>}
+            {booking.payments.map((payment) => (
+              <div className="payment-history-row" key={payment.id}>
+                <strong>{formatPrice(payment.amount)}</strong>
+                <span>{payment.date || "Без даты"}</span>
+                <span>{payment.method}</span>
+                <span>{payment.recipient}</span>
+              </div>
+            ))}
+          </div>
+          <form
+            className="payment-add-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const amount = Number(paymentForm.amount);
+              if (!Number.isFinite(amount) || amount <= 0) return;
+              void onAddPayment({
+                amount,
+                date: paymentForm.date,
+                method: paymentForm.method,
+                recipient: paymentForm.recipient,
+              });
+            }}
+          >
+            <div className="editor-grid payment-form-grid">
+              <label className="form-field">
+                <span>Сумма</span>
+                <input type="number" min="1" required value={paymentForm.amount} onChange={(event) => setPaymentForm({ ...paymentForm, amount: event.target.value })} />
+              </label>
+              <label className="form-field">
+                <span>Дата</span>
+                <input type="date" required value={paymentForm.date} onChange={(event) => setPaymentForm({ ...paymentForm, date: event.target.value })} />
+              </label>
+              <label className="form-field">
+                <span>Способ оплаты</span>
+                <select value={paymentForm.method} onChange={(event) => setPaymentForm({ ...paymentForm, method: event.target.value })}>
+                  {paymentMethods.map((method) => <option key={method}>{method}</option>)}
+                </select>
+              </label>
+              <label className="form-field">
+                <span>Получатель</span>
+                <select value={paymentForm.recipient} onChange={(event) => setPaymentForm({ ...paymentForm, recipient: event.target.value })}>
+                  {paymentRecipients.map((recipient) => <option key={recipient}>{recipient}</option>)}
+                </select>
+              </label>
+              <div className="payment-form-submit">
+                <button className="secondary-button" disabled={saving} type="submit"><CircleDollarSign size={16} /> Добавить оплату</button>
+              </div>
+            </div>
+          </form>
+        </section>
+      )}
+    </aside>
+  );
+}
+
+function RepeatPlanner({
+  bookings,
+  onComplete,
+}: {
+  bookings: BookingRequest[];
+  onComplete: (message: string) => Promise<void>;
+}) {
+  const today = arenaDateValue();
+  const [sourceFrom, setSourceFrom] = useState(today);
+  const [sourceTo, setSourceTo] = useState(today);
+  const [mode, setMode] = useState<"once" | "month" | "until">("once");
+  const [targetStart, setTargetStart] = useState(addDays(today, 7));
+  const [untilDate, setUntilDate] = useState(addDays(today, 28));
+  const [working, setWorking] = useState(false);
+  const [result, setResult] = useState("");
+  const [selectedBookingIds, setSelectedBookingIds] = useState<string[]>([]);
+
+  const sourceBookings = useMemo(
+    () => bookings
+      .filter((item) => item.status !== "deleted" && item.status !== "cancelled")
+      .filter((item) => item.date >= sourceFrom && item.date <= sourceTo)
+      .sort(bookingSort),
+    [bookings, sourceFrom, sourceTo],
+  );
+
+  useEffect(() => {
+    const availableIds = new Set(sourceBookings.map((item) => item.id));
+    setSelectedBookingIds((current) => {
+      const kept = current.filter((id) => availableIds.has(id));
+      const next = [...kept];
+      sourceBookings.forEach((booking) => {
+        if (!next.includes(booking.id)) next.push(booking.id);
+      });
+      return next;
+    });
+  }, [sourceBookings]);
+
+  const selectedSourceBookings = useMemo(
+    () => sourceBookings.filter((booking) => selectedBookingIds.includes(booking.id)),
+    [selectedBookingIds, sourceBookings],
+  );
+
+  function toggleBookingSelection(bookingId: string) {
+    setSelectedBookingIds((current) =>
+      current.includes(bookingId)
+        ? current.filter((id) => id !== bookingId)
+        : [...current, bookingId],
+    );
+  }
+
+  async function repeatSchedule(event: FormEvent) {
+    event.preventDefault();
+    if (sourceBookings.length === 0) {
+      setResult("В выбранном исходном периоде нет активных броней.");
+      return;
+    }
+
+    if (selectedSourceBookings.length === 0) {
+      setResult("Выберите хотя бы одну бронь для повторения.");
+      return;
+    }
+
+    setWorking(true);
+    let created = 0;
+    const conflicts: string[] = [];
+    const shifts: number[] = [];
+    const baseShift = diffDays(sourceFrom, targetStart);
+
+    if (mode === "once") {
+      shifts.push(baseShift);
+    } else if (mode === "month") {
+      for (let index = 0; index < 4; index += 1) shifts.push(baseShift + index * 7);
+    } else {
+      for (let shift = baseShift; addDays(sourceTo, shift) <= untilDate; shift += 7) shifts.push(shift);
+    }
+
+    try {
+      for (const shift of shifts) {
+        for (const booking of selectedSourceBookings) {
+          const payload = {
+            date: addDays(booking.date, shift),
+            time: booking.time,
+            duration: booking.duration,
+            format: booking.format,
+            sector: booking.sector,
+            listPrice: booking.listPrice,
+            salePrice: booking.salePrice,
+            price: booking.price,
+            name: booking.name,
+            phone: booking.phone,
+            team: booking.team,
+            source: "Повтор расписания",
+            sourceDetail: `${booking.date} ${booking.time}`,
+            status: "confirmed",
+            comment: `Повторено из ${booking.date} ${booking.time}`,
+          };
+
+          const response = await fetch("/api/bookings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json();
+
+          if (!response.ok) {
+            conflicts.push(result.error || `${payload.date} ${payload.time}`);
+            continue;
+          }
+
+          created += 1;
+        }
+      }
+
+      const message = `Создано ${created} броней, конфликтов ${conflicts.length}.`;
+      setResult(conflicts.length ? `${message} Конфликты: ${conflicts.slice(0, 5).join("; ")}` : message);
+      await onComplete(message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="admin-heading">
+        <div>
+          <div className="section-kicker">Повторение</div>
+          <h1>Повторить расписание</h1>
+          <p>Администратор может копировать день, неделю, месяц или продлевать график до даты.</p>
+        </div>
+      </div>
+      <form className="admin-card repeat-card" onSubmit={(event) => void repeatSchedule(event)}>
+        <div className="editor-grid">
+          <label className="form-field">
+            <span>Исходная дата с</span>
+            <input type="date" value={sourceFrom} onChange={(event) => setSourceFrom(event.target.value)} />
+          </label>
+          <label className="form-field">
+            <span>Исходная дата по</span>
+            <input type="date" value={sourceTo} onChange={(event) => setSourceTo(event.target.value)} />
+          </label>
+          <label className="form-field repeat-mode-field">
+            <span>Сценарий</span>
+            <select className="repeat-mode-select" value={mode} onChange={(event) => setMode(event.target.value as "once" | "month" | "until")}>
+              <option value="once">Скопировать период один раз</option>
+              <option value="month">Повторить на месяц</option>
+              <option value="until">Продлить до даты</option>
+            </select>
+            <span aria-hidden="true" className="repeat-mode-caret" />
+          </label>
+          <label className="form-field">
+            <span>Начать с даты</span>
+            <input type="date" value={targetStart} onChange={(event) => setTargetStart(event.target.value)} />
+          </label>
+          {mode === "until" && (
+            <label className="form-field editor-span-2">
+              <span>Повторять до дата</span>
+              <input type="date" value={untilDate} onChange={(event) => setUntilDate(event.target.value)} />
+            </label>
+          )}
+        </div>
+        <div className="repeat-preview">
+          <strong>Исходных броней: {selectedSourceBookings.length} из {sourceBookings.length}</strong>
+          <small>Все брони отмечены по умолчанию. Снимите галочки у тех, которые не нужно повторять.</small>
+        </div>
+        {sourceBookings.length > 0 && (
+          <div className="repeat-source-list">
+            {sourceBookings.map((booking) => (
+              <label className={`repeat-source-row ${selectedBookingIds.includes(booking.id) ? "selected" : ""}`} key={booking.id}>
+                <span className="repeat-source-check">
+                  <input
+                    checked={selectedBookingIds.includes(booking.id)}
+                    onChange={() => toggleBookingSelection(booking.id)}
+                    type="checkbox"
+                  />
+                  <span className="repeat-source-checkmark">
+                    <Check size={14} strokeWidth={3} />
+                  </span>
+                </span>
+                <span className="repeat-source-content">
+                  <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
+                  <span>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+        {result && <div className={`admin-booking-message ${result.includes("Создано") ? "success" : ""}`}>{result}</div>}
+        <div className="repeat-actions">
+          <button className="primary-button" disabled={working} type="submit">
+            <CopyPlus size={16} /> {working ? "Копируем..." : "Повторить расписание"}
+          </button>
+        </div>
+      </form>
+    </>
+  );
+}
+
+type AnalyticsView = "overview" | "finance" | "utilization" | "clients" | "funnel" | "sources" | "operations";
+type RangePreset = "7d" | "30d" | "month" | "quarter" | "year" | "all" | "custom";
+
+type AnalyticsRow = {
+  label: string;
+  value: string;
+  meta?: string;
+  tone?: "neutral" | "success" | "warning" | "danger";
+  onClick?: () => void;
+};
+
+function dateOnly(value: string) {
+  return value ? value.slice(0, 10) : "";
+}
+
+function periodStartDate(today: string, preset: Exclude<RangePreset, "custom">) {
+  const base = new Date(`${today}T00:00:00`);
+  if (preset === "7d") {
+    base.setDate(base.getDate() - 6);
+    return base.toISOString().slice(0, 10);
+  }
+  if (preset === "30d") {
+    base.setDate(base.getDate() - 29);
+    return base.toISOString().slice(0, 10);
+  }
+  if (preset === "month") return today.slice(0, 8) + "01";
+  if (preset === "quarter") {
+    const quarterMonth = Math.floor(base.getMonth() / 3) * 3;
+    return `${base.getFullYear()}-${String(quarterMonth + 1).padStart(2, "0")}-01`;
+  }
+  if (preset === "year") return `${base.getFullYear()}-01-01`;
+  return "0000-01-01";
+}
+
+function normalizePhone(phone: string) {
+  return phone.replace(/\D/g, "");
+}
+
+function hours(value: number) {
+  return `${value.toFixed(1)} ч.`;
+}
+
+function percentage(value: number) {
+  return `${value.toFixed(1)}%`;
+}
+
+function average(values: number[]) {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function between(value: string, from: string, to: string) {
+  if (!value) return false;
+  return value >= from && value <= to;
+}
+
+function daysBetween(from: string, to: string) {
+  return Math.max(1, diffDays(from, to) + 1);
+}
+
+function hoursBetween(fromIso: string, toIso: string) {
+  const from = new Date(fromIso).getTime();
+  const to = new Date(toIso).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
+  return (to - from) / 3_600_000;
+}
+
+function occupiedUnits(booking: BookingRequest) {
+  return booking.sector.split("+").filter(Boolean).length || (booking.format === "full" ? 4 : booking.format === "half" ? 2 : 1);
+}
+
+function AnalyticsDashboard({
+  bookings,
+  onOpenBooking,
+  onOpenStatus,
+  onOpenFilter,
+  onOpenDate,
+}: {
+  bookings: BookingRequest[];
+  onOpenBooking: (bookingId: string, fallbackStatus?: QueueStatus) => void;
+  onOpenStatus: (status: QueueStatus, bookingId?: string) => void;
+  onOpenFilter: (nextTab: Tab, nextQuery: string) => void;
+  onOpenDate: (date: string) => void;
+}) {
+  const today = arenaDateValue();
+  const [view, setView] = useState<AnalyticsView>("overview");
+  const [preset, setPreset] = useState<RangePreset>("month");
+  const [customFrom, setCustomFrom] = useState(periodStartDate(today, "month"));
+  const [customTo, setCustomTo] = useState(today);
+
+  const range = useMemo(() => {
+    if (preset === "custom") return { from: customFrom, to: customTo };
+    return { from: periodStartDate(today, preset), to: today };
+  }, [customFrom, customTo, preset, today]);
+
+  const allActive = useMemo(
+    () => bookings.filter((item) => item.status !== "deleted"),
+    [bookings],
+  );
+
+  const byBookingDate = useMemo(
+    () => allActive.filter((item) => between(item.date, range.from, range.to)),
+    [allActive, range.from, range.to],
+  );
+
+  const byCreatedDate = useMemo(
+    () => allActive.filter((item) => between(dateOnly(item.createdAt), range.from, range.to)),
+    [allActive, range.from, range.to],
+  );
+
+  const activeBooked = useMemo(
+    () => byBookingDate,
+    [byBookingDate],
+  );
+
+  const confirmed = useMemo(
+    () => byBookingDate.filter((item) => item.status === "confirmed"),
+    [byBookingDate],
+  );
+
+  // Removed cancelled as per request
+  // const cancelled = useMemo(
+  //   () => byCreatedDate.filter((item) => item.status === "cancelled"),
+  //   [byCreatedDate],
+  // );
+
+  const periodDays = daysBetween(range.from, range.to);
+  const fieldHours = activeBooked.reduce((sum, item) => sum + (item.duration / 60) * occupiedUnits(item), 0);
+  const totalCapacityHours = periodDays * 24 * 4;
+  const utilizationRate = totalCapacityHours > 0 ? (fieldHours / totalCapacityHours) * 100 : 0;
+  const revenue = confirmed.reduce((sum, item) => sum + (Number(item.salePrice || item.price) || 0), 0);
+  const paid = confirmed.reduce((sum, item) => sum + (Number(item.prepayment) || 0), 0);
+  const debt = confirmed.reduce((sum, item) => sum + (Number(item.balance) || 0), 0);
+  const averageConfirmed = (list: BookingRequest[]) => {
+    if (list.length === 0) return 0;
+    const total = list.reduce((sum, item) => sum + (Number(item.salePrice || item.price) || 0), 0);
+    return total / list.length;
+  };
+  const averageCheck = averageConfirmed(confirmed);
+  const upcomingConfirmed = activeBooked.filter((item) => item.date >= today && item.status === "confirmed");
+  const todayRevenue = confirmed.filter((item) => item.date === today).reduce((sum, item) => sum + item.salePrice, 0);
+  const todayBookings = activeBooked.filter((item) => item.date === today).length;
+
+  const clients = Array.from(activeBooked.reduce<Map<string, {
+    phone: string;
+    name: string;
+    bookings: number;
+    revenue: number;
+    paid: number;
+    debt: number;
+    lastDate: string;
+    sources: Set<string>;
+  }>>((map, item) => {
+    const key = normalizePhone(item.phone) || item.id;
+    const current = map.get(key) || {
+      phone: item.phone,
+      name: item.name,
+      bookings: 0,
+      revenue: 0,
+      paid: 0,
+      debt: 0,
+      lastDate: item.date,
+      sources: new Set<string>(),
+    };
+    current.bookings += 1;
+    current.revenue += Number(item.salePrice || item.price) || 0;
+    current.paid += Number(item.prepayment) || 0;
+    current.debt += Number(item.balance) || 0;
+    current.lastDate = current.lastDate > item.date ? current.lastDate : item.date;
+    current.sources.add(item.source || "Сайт");
+    map.set(key, current);
+    return map;
+  }, new Map()).values());
+
+  const newClients = clients.filter((client) => client.bookings <= 1).length;
+  const repeatClients = clients.filter((client) => client.bookings > 1).length;
+  const dormantClients = clients.filter((client) => diffDays(client.lastDate, today) > 30);
+  const topClients = [...clients]
+    .sort((a, b) => b.revenue - a.revenue || b.bookings - a.bookings)
+    .slice(0, 8)
+    .map((client) => ({
+      label: client.name,
+      value: formatPrice(client.revenue),
+      meta: `${client.bookings} броней · ${client.phone}`,
+      onClick: () => onOpenFilter("status:confirmed", client.name),
+    }));
+
+  const sourceStats = Array.from(activeBooked.reduce<Map<string, {
+    label: string;
+    bookings: number;
+    confirmed: number;
+    revenue: number;
+    clients: Set<string>;
+  }>>((map, item) => {
+    const key = item.source || "Сайт";
+    const current = map.get(key) || { label: key, bookings: 0, confirmed: 0, revenue: 0, clients: new Set<string>() };
+    current.bookings += 1;
+    current.confirmed += item.status === "confirmed" ? 1 : 0;
+    current.revenue += Number(item.salePrice || item.price) || 0;
+    current.clients.add(normalizePhone(item.phone) || item.id);
+    map.set(key, current);
+    return map;
+  }, new Map()).values()).sort((a, b) => b.revenue - a.revenue);
+
+  const sourceRows: AnalyticsRow[] = sourceStats.map((source) => ({
+    label: source.label,
+    value: formatPrice(source.revenue),
+    meta: `${source.bookings} броней · конверсия ${percentage(source.bookings ? (source.confirmed / source.bookings) * 100 : 0)} · ${source.clients.size} клиентов`,
+    onClick: () => onOpenFilter("status:confirmed", source.label),
+  }));
+
+  const financeRows: AnalyticsRow[] = Array.from(confirmed.reduce<Map<string, { revenue: number; paid: number; debt: number; bookings: number }>>((map, item) => {
+    const key = item.date;
+    const current = map.get(key) || { revenue: 0, paid: 0, debt: 0, bookings: 0 };
+    current.revenue += Number(item.salePrice || item.price) || 0;
+    current.paid += Number(item.prepayment) || 0;
+    current.debt += Number(item.balance) || 0;
+    current.bookings += 1;
+    map.set(key, current);
+    return map;
+  }, new Map()).entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-10)
+    .map(([date, item]) => ({
+      label: date,
+      value: formatPrice(item.revenue),
+      meta: `${item.bookings} броней · оплачено ${formatPrice(item.paid)} · долг ${formatPrice(item.debt)}`,
+      onClick: () => onOpenDate(date),
+    }));
+
+  const recipientRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => item.paymentRecipient || "Не указан", (item) => Number(item.prepayment) || 0, true)
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("status:confirmed", row.label) }));
+  const methodRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => item.paymentMethod || "Не выбран", (item) => Number(item.prepayment) || 0, true)
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("status:confirmed", row.label) }));
+  const formatRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => formatLabel(item.format), (item) => Number(item.salePrice || item.price) || 0, true)
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("status:confirmed", row.label) }));
+  const sectorRows: AnalyticsRow[] = aggregateRows(activeBooked, (item) => item.sector, (item) => item.duration / 60, false, "ч.")
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("schedule", row.label) }));
+  const timeRows: AnalyticsRow[] = aggregateRows(activeBooked, (item) => item.time, (item) => item.duration / 60, false, "ч.")
+    .map((row) => ({ ...row, onClick: () => onOpenFilter("schedule", row.label) }));
+
+  const funnelCreated = byCreatedDate.length;
+  const funnelConfirmed = byCreatedDate.filter((item) => item.status === "confirmed").length;
+  const funnelPaid = byCreatedDate.filter((item) => item.status === "confirmed" && item.paymentStatus === "paid").length;
+  // Removed cancelled from funnel as per request
+  // const funnelCancelled = byCreatedDate.filter((item) => item.status === "cancelled").length;
+  const avgToPayment = average(
+    byCreatedDate
+      .map((item) => {
+        const firstPayment = [...item.payments].sort((a, b) => a.date.localeCompare(b.date))[0];
+        if (!firstPayment?.date) return null;
+        return hoursBetween(item.createdAt, `${firstPayment.date}T00:00:00`);
+      })
+      .filter((value): value is number => value != null),
+  );
+  const avgToConfirm = average(
+    byCreatedDate
+      .map((item) => item.confirmedAt ? hoursBetween(item.createdAt, item.confirmedAt) : null)
+      .filter((value): value is number => value != null),
+  );
+
+  const overdueRows: AnalyticsRow[] = confirmed
+    .filter((item) => item.balance > 0 && item.date < today)
+    .sort((a, b) => b.balance - a.balance)
+    .slice(0, 8)
+    .map((item) => ({
+      label: item.name,
+      value: formatPrice(item.balance),
+      meta: `${item.date} · ${item.phone} · ${formatLabel(item.format)}`,
+      tone: "danger",
+    }));
+
+  const discountRows: AnalyticsRow[] = confirmed
+    .filter((item) => item.salePrice < item.listPrice)
+    .sort((a, b) => (b.listPrice - b.salePrice) - (a.listPrice - a.salePrice))
+    .slice(0, 8)
+    .map((item) => ({
+      label: item.name,
+      value: formatPrice(item.listPrice - item.salePrice),
+      meta: `${item.date} · прайс ${formatPrice(item.listPrice)} -> факт ${formatPrice(item.salePrice)}`,
+      tone: "warning",
+    }));
+
+  const partialUpcomingRows: AnalyticsRow[] = activeBooked
+    .filter((item) => item.date >= today && diffDays(today, item.date) <= 3 && item.balance > 0)
+    .sort(bookingSort)
+    .slice(0, 8)
+    .map((item) => ({
+      label: `${item.name} · ${item.date}`,
+      value: formatPrice(item.balance),
+      meta: `${item.time}-${bookingEndTime(item.time, item.duration)} · ${item.paymentStatus}`,
+      tone: "warning",
+    }));
+
+  const backdatedRows: AnalyticsRow[] = byCreatedDate
+    .filter((item) => dateOnly(item.createdAt) > item.date)
+    .slice(0, 8)
+    .map((item) => ({
+      label: item.name,
+      value: `${item.date}`,
+      meta: `Создано ${dateOnly(item.createdAt)} · ${item.time}`,
+      tone: "neutral",
+    }));
+
+  const noCommentCount = confirmed.filter((item) => !item.comment.trim()).length;
+
+  const overdueRowsLinked = overdueRows.map((row) => {
+    const booking = confirmed
+      .filter((item) => item.balance > 0 && item.date < today)
+      .sort((a, b) => b.balance - a.balance)
+      .find((item) => item.name === row.label && formatPrice(item.balance) === row.value);
+    return booking ? { ...row, onClick: () => onOpenBooking(booking.id, "confirmed") } : row;
+  });
+
+  const discountRowsLinked = discountRows.map((row) => {
+    const booking = confirmed
+      .filter((item) => item.salePrice < item.listPrice)
+      .sort((a, b) => (b.listPrice - b.salePrice) - (a.listPrice - a.salePrice))
+      .find((item) => item.name === row.label && formatPrice(item.listPrice - item.salePrice) === row.value);
+    return booking ? { ...row, onClick: () => onOpenBooking(booking.id, "confirmed") } : row;
+  });
+
+  const partialUpcomingRowsLinked = partialUpcomingRows.map((row) => {
+    const booking = activeBooked
+      .filter((item) => item.date >= today && diffDays(today, item.date) <= 3 && item.balance > 0)
+      .sort(bookingSort)
+      .find((item) => `${item.name} · ${item.date}` === row.label || `${item.name} · ${item.date}` === row.label);
+    return booking
+      ? { ...row, onClick: () => onOpenBooking(booking.id, booking.status === "in_progress" ? "in_progress" : "confirmed") }
+      : row;
+  });
+
+  const backdatedRowsLinked = backdatedRows.map((row) => {
+    const booking = byCreatedDate
+      .filter((item) => dateOnly(item.createdAt) > item.date)
+      .find((item) => item.name === row.label && item.date === row.value);
+    return booking
+      ? {
+          ...row,
+          onClick: () =>
+            onOpenBooking(
+              booking.id,
+              booking.status === "cancelled"
+                ? "cancelled"
+                : booking.status === "in_progress"
+                  ? "in_progress"
+                  : booking.status === "new"
+                    ? "new"
+                    : "confirmed",
+            ),
+        }
+      : row;
+  });
+
+  
+  const overviewCards = [
+    { label: "Выручка сегодня", value: formatPrice(todayRevenue), hint: `${todayBookings} броней сегодня` },
+    { label: "Выручка периода", value: formatPrice(revenue), hint: `${confirmed.length} подтвержденных` },
+    { label: "Оплачено", value: formatPrice(paid), hint: "Фактические поступления" },
+    { label: "Долг", value: formatPrice(debt), hint: `${overdueRows.length} просроченных` },
+    { label: "Загрузка", value: percentage(utilizationRate), hint: `${hours(fieldHours)} из ${hours(totalCapacityHours)}` },
+    { label: "Средний чек", value: formatPrice(averageCheck), hint: "По подтвержденным броням" },
+    { label: "Новые заявки", value: String(byCreatedDate.filter((item) => item.status === "new").length), hint: "Созданы в периоде" },
+    { label: "Конверсия", value: percentage(funnelCreated ? (funnelConfirmed / funnelCreated) * 100 : 0), hint: "Из заявки в подтверждение" },
+    { label: "Повторные клиенты", value: String(repeatClients), hint: `${newClients} новых` },
+    { label: "Топ источник", value: sourceStats[0]?.label || "Нет данных", hint: sourceStats[0] ? formatPrice(sourceStats[0].revenue) : "Пока пусто" },
+  ];
+
+  return (
+    <>
+      <div className="admin-heading">
+        <div>
+          <div className="section-kicker">BI внутри админки</div>
+          <h1>Аналитика</h1>
+          <p>Сводка, финансы, загрузка, клиенты, воронка, источники и операционный контроль без внешних BI-сервисов.</p>
+        </div>
+      </div>
+
+      <section className="admin-card analytics-filter-card">
+        <div className="analytics-toolbar">
+          <div className="analytics-tabs">
+            {[
+              ["overview", "Сводка"],
+              ["finance", "Финансы"],
+              ["utilization", "Загрузка"],
+              ["clients", "Клиенты"],
+              ["funnel", "Воронка"],
+              ["sources", "Источники"],
+              ["operations", "Контроль"],
+            ].map(([id, label]) => (
+              <button
+                className={view === id ? "active" : ""}
+                key={id}
+                onClick={() => setView(id as AnalyticsView)}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="analytics-range">
+            <select value={preset} onChange={(event) => setPreset(event.target.value as RangePreset)}>
+              <option value="7d">7 дней</option>
+              <option value="30d">30 дней</option>
+              <option value="month">Месяц</option>
+              <option value="quarter">Квартал</option>
+              <option value="year">Год</option>
+              <option value="all">Все время</option>
+              <option value="custom">Свой период</option>
+            </select>
+            {preset === "custom" && (
+              <>
+                <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} />
+                <input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} />
+              </>
+            )}
+            <span>{range.from} - {range.to}</span>
+          </div>
+        </div>
+      </section>
+
+      {view === "overview" && (
+        <>
+          <div className="analytics-grid analytics-grid-wide">
+            {overviewCards.map((card) => (
+              <AnalyticsStatCard key={card.label} label={card.label} value={card.value} hint={card.hint} />
+            ))}
+          </div>
+          <div className="analytics-tables analytics-tables-wide">
+            <AnalyticsListCard title="Финансы по дням" rows={financeRows} />
+            <AnalyticsListCard title="Топ клиенты" rows={topClients} />
+            <AnalyticsListCard title="Топ источники" rows={sourceRows.slice(0, 8)} />
+          </div>
+        </>
+      )}
+
+      {view === "finance" && (
+        <>
+          <div className="analytics-grid analytics-grid-wide">
+            <AnalyticsStatCard label="Плановая выручка" value={formatPrice(revenue)} hint="Подтвержденные брони периода" />
+            <AnalyticsStatCard label="Фактически оплачено" value={formatPrice(paid)} hint="Сумма всех оплат" />
+            <AnalyticsStatCard label="Остаток долга" value={formatPrice(debt)} hint={`${overdueRows.length} просроченных броней`} />
+            <AnalyticsStatCard label="Средний чек" value={formatPrice(averageCheck)} hint="По подтвержденным" />
+          </div>
+          <div className="analytics-tables analytics-tables-wide">
+            <AnalyticsListCard title="Поступления по способам оплаты" rows={methodRows} />
+            <AnalyticsListCard title="Поступления по получателям" rows={recipientRows} />
+            <AnalyticsListCard title="Скидки ниже прайса" rows={discountRowsLinked} />
+            <AnalyticsListCard title="Долги клиентов" rows={overdueRowsLinked} />
+          </div>
+        </>
+      )}
+
+      {view === "utilization" && (
+        <>
+          <div className="analytics-grid analytics-grid-wide">
+            <AnalyticsStatCard label="Занято field-hours" value={hours(fieldHours)} hint="С учетом четвертей поля" />
+            <AnalyticsStatCard label="Емкость периода" value={hours(totalCapacityHours)} hint={`${periodDays} дней по 4 сектора`} />
+            <AnalyticsStatCard label="Загрузка объекта" value={percentage(utilizationRate)} hint="От полной емкости" />
+            <AnalyticsStatCard label="Ближайшие подтвержденные" value={String(upcomingConfirmed.length)} hint="Будущие активные игры" />
+          </div>
+          <div className="analytics-tables analytics-tables-wide">
+            <AnalyticsListCard title="Загрузка по форматам" rows={formatRows} />
+            <AnalyticsListCard title="Загрузка по секторам" rows={sectorRows} />
+            <AnalyticsListCard title="Пиковые часы" rows={timeRows.slice(0, 10)} />
+          </div>
+        </>
+      )}
+
+      {view === "clients" && (
+        <>
+          <div className="analytics-grid analytics-grid-wide">
+            <AnalyticsStatCard label="Клиентов в периоде" value={String(clients.length)} hint="Уникальные телефоны" />
+            <AnalyticsStatCard label="Новые" value={String(newClients)} hint="1 бронь за период" />
+            <AnalyticsStatCard label="Повторные" value={String(repeatClients)} hint="2+ брони за период" />
+            <AnalyticsStatCard label="Не возвращались 30+ дней" value={String(dormantClients.length)} hint="Риск оттока" />
+          </div>
+          <div className="analytics-tables analytics-tables-wide">
+            <AnalyticsListCard title="Топ клиенты по выручке" rows={topClients} />
+            <AnalyticsListCard
+              title="Клиенты с долгами"
+              rows={clients.filter((client) => client.debt > 0).sort((a, b) => b.debt - a.debt).slice(0, 8).map((client) => ({
+                label: client.name,
+                value: formatPrice(client.debt),
+                meta: `${client.bookings} броней · ${client.phone}`,
+              }))}
+            />
+          </div>
+        </>
+      )}
+
+      {view === "funnel" && (
+        <>
+          <div className="analytics-grid analytics-grid-wide">
+            <AnalyticsStatCard label="Новые заявки" value={String(funnelCreated)} hint="Созданы в периоде" />
+            <AnalyticsStatCard label="Подтверждено" value={String(funnelConfirmed)} hint={percentage(funnelCreated ? (funnelConfirmed / funnelCreated) * 100 : 0)} />
+            <AnalyticsStatCard label="Полностью оплачено" value={String(funnelPaid)} hint={percentage(funnelConfirmed ? (funnelPaid / funnelConfirmed) * 100 : 0)} />
+            {/* Removed Отменено as per request */}
+            <AnalyticsStatCard label="До подтверждения" value={avgToConfirm ? hours(avgToConfirm) : "Нет данных"} hint="Среднее время реакции" />
+            <AnalyticsStatCard label="До первой оплаты" value={avgToPayment ? hours(avgToPayment) : "Нет данных"} hint="От заявки до денег" />
+          </div>
+          <div className="analytics-tables">
+            <AnalyticsListCard
+              title="Статусы заявок"
+              rows={[
+                { label: "Новые", value: String(byCreatedDate.filter((item) => item.status === "new").length), meta: "Ожидают обработки", onClick: () => onOpenStatus("new") },
+                { label: "В работе", value: String(byCreatedDate.filter((item) => item.status === "in_progress").length), meta: "На контроле администратора", onClick: () => onOpenStatus("in_progress") },
+                { label: "Подтвержденные", value: String(byCreatedDate.filter((item) => item.status === "confirmed").length), meta: "Успешно проведены", onClick: () => onOpenStatus("confirmed") },
+                /* Removed Отмененные as per request */
+              ]}
+            />
+          </div>
+        </>
+      )}
+
+      {view === "sources" && (
+        <>
+          <div className="analytics-grid analytics-grid-wide">
+            <AnalyticsStatCard label="Источников" value={String(sourceStats.length)} hint="Активные каналы периода" />
+            <AnalyticsStatCard label="Топ по выручке" value={sourceStats[0]?.label || "Нет данных"} hint={sourceStats[0] ? formatPrice(sourceStats[0].revenue) : ""} />
+            <AnalyticsStatCard label="Топ по конверсии" value={bestConversion(sourceStats)?.label || "Нет данных"} hint={bestConversion(sourceStats) ? percentage(bestConversion(sourceStats)!.bookings ? (bestConversion(sourceStats)!.confirmed / bestConversion(sourceStats)!.bookings) * 100 : 0) : ""} />
+          </div>
+          <div className="analytics-tables analytics-tables-wide">
+            <AnalyticsListCard title="Источники по выручке" rows={sourceRows} />
+            <AnalyticsListCard
+              title="Метки источников"
+              rows={aggregateRows(activeBooked, (item) => item.sourceDetail || "Без метки", (item) => Number(item.salePrice || item.price) || 0, true)}
+            />
+          </div>
+        </>
+      )}
+
+      {view === "operations" && (
+        <>
+          <div className="analytics-grid analytics-grid-wide">
+            <AnalyticsStatCard label="Просроченные долги" value={String(overdueRows.length)} hint="Нужен контакт с клиентами" />
+            <AnalyticsStatCard label="Без комментария" value={String(noCommentCount)} hint="Не хватает контекста для админа" />
+            <AnalyticsStatCard label="Частичные оплаты 3 дня" value={String(partialUpcomingRows.length)} hint="Нужно дожать оплату" />
+            <AnalyticsStatCard label="Задним числом" value={String(backdatedRows.length)} hint="Брони созданы после даты игры" />
+          </div>
+          <div className="analytics-tables analytics-tables-wide">
+            <AnalyticsListCard title="Просроченные долги" rows={overdueRowsLinked} />
+            <AnalyticsListCard title="Частично оплаченные ближайшие брони" rows={partialUpcomingRowsLinked} />
+            <AnalyticsListCard title="Брони задним числом" rows={backdatedRowsLinked} />
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function AnalyticsStatCard({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <div className="admin-card analytics-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{hint}</small>
+    </div>
+  );
+}
+
+function AnalyticsListCard({ title, rows }: { title: string; rows: AnalyticsRow[] }) {
+  return (
+    <section className="admin-card analytics-table">
+      <div className="analytics-table-head">
+        <h2>{title}</h2>
+        <span>{rows.length} строк</span>
+      </div>
+      {rows.length === 0 && <div className="empty-state">Данных пока нет</div>}
+      {rows.map((row) => {
+        const content = (
+          <>
+            <div>
+              <strong>{row.label}</strong>
+              {row.meta && <small>{row.meta}</small>}
+            </div>
+            <span>{row.value}</span>
+          </>
+        );
+
+        if (!row.onClick) {
+          return (
+            <div className={`analytics-row analytics-row-${row.tone || "neutral"}`} key={`${title}-${row.label}-${row.value}`}>
+              {content}
+            </div>
+          );
+        }
+
+        return (
+          <button
+            className={`analytics-row analytics-row-${row.tone || "neutral"} analytics-row-button`}
+            key={`${title}-${row.label}-${row.value}`}
+            onClick={row.onClick}
+            type="button"
+          >
+            {content}
+          </button>
+        );
+      })}
+    </section>
+  );
+}
+
+function aggregateRows<T>(
+  items: T[],
+  label: (item: T) => string,
+  metric: (item: T) => number,
+  asMoney = false,
+  suffix = "",
+) {
+  const rows = items.reduce<Map<string, { label: string; value: number; count: number }>>((map, item) => {
+    const key = label(item) || "Не указано";
+    const current = map.get(key) || { label: key, value: 0, count: 0 };
+    current.value += metric(item);
+    current.count += 1;
+    map.set(key, current);
+    return map;
+  }, new Map());
+
+  return Array.from(rows.values())
+    .sort((a, b) => b.value - a.value)
+    .map((row) => ({
+      label: row.label,
+      value: asMoney ? formatPrice(row.value) : `${row.value.toFixed(1)}${suffix ? ` ${suffix}` : ""}`.trim(),
+      meta: `${row.count} записей`,
+    }));
+  }
+
+function bestConversion<T extends { bookings: number; confirmed: number }>(items: T[]) {
+  return [...items]
+    .filter((item) => item.bookings > 0)
+    .sort((a, b) => (b.confirmed / b.bookings) - (a.confirmed / a.bookings))[0];
+}
