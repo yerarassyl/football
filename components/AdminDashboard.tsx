@@ -1492,6 +1492,7 @@ type AnalyticsRow = {
   meta?: string;
   tone?: "neutral" | "success" | "warning" | "danger";
   onClick?: () => void;
+  bookingId?: string;
 };
 
 function dateOnly(value: string) {
@@ -1753,6 +1754,7 @@ function AnalyticsDashboard({
       value: formatPrice(item.balance),
       meta: `${item.date} · ${item.phone} · ${formatLabel(item.format)}`,
       tone: "danger",
+      bookingId: item.id,
     }));
 
   const discountRows: AnalyticsRow[] = confirmed
@@ -1764,6 +1766,7 @@ function AnalyticsDashboard({
       value: formatPrice(item.listPrice - item.salePrice),
       meta: `${item.date} · прайс ${formatPrice(item.listPrice)} -> факт ${formatPrice(item.salePrice)}`,
       tone: "warning",
+      bookingId: item.id,
     }));
 
   const partialUpcomingRows: AnalyticsRow[] = activeBooked
@@ -1775,6 +1778,7 @@ function AnalyticsDashboard({
       value: formatPrice(item.balance),
       meta: `${item.time}-${bookingEndTime(item.time, item.duration)} · ${item.paymentStatus}`,
       tone: "warning",
+      bookingId: item.id,
     }));
 
   const backdatedRows: AnalyticsRow[] = byCreatedDate
@@ -1785,56 +1789,45 @@ function AnalyticsDashboard({
       value: `${item.date}`,
       meta: `Создано ${dateOnly(item.createdAt)} · ${item.time}`,
       tone: "neutral",
+      bookingId: item.id,
     }));
 
   const noCommentCount = confirmed.filter((item) => !item.comment.trim()).length;
 
-  const overdueRowsLinked = overdueRows.map((row) => {
-    const booking = confirmed
-      .filter((item) => item.balance > 0 && item.date < today)
-      .sort((a, b) => b.balance - a.balance)
-      .find((item) => item.name === row.label && formatPrice(item.balance) === row.value);
-    return booking ? { ...row, onClick: () => onOpenBooking(booking.id, "confirmed") } : row;
-  });
+  const overdueRowsLinked = overdueRows.map((row) =>
+    row.bookingId ? { ...row, onClick: () => onOpenBooking(row.bookingId!, "confirmed") } : row,
+  );
 
-  const discountRowsLinked = discountRows.map((row) => {
-    const booking = confirmed
-      .filter((item) => item.salePrice < item.listPrice)
-      .sort((a, b) => (b.listPrice - b.salePrice) - (a.listPrice - a.salePrice))
-      .find((item) => item.name === row.label && formatPrice(item.listPrice - item.salePrice) === row.value);
-    return booking ? { ...row, onClick: () => onOpenBooking(booking.id, "confirmed") } : row;
-  });
+  const discountRowsLinked = discountRows.map((row) =>
+    row.bookingId ? { ...row, onClick: () => onOpenBooking(row.bookingId!, "confirmed") } : row,
+  );
 
   const partialUpcomingRowsLinked = partialUpcomingRows.map((row) => {
-    const booking = activeBooked
-      .filter((item) => item.date >= today && diffDays(today, item.date) <= 3 && item.balance > 0)
-      .sort(bookingSort)
-      .find((item) => `${item.name} · ${item.date}` === row.label || `${item.name} · ${item.date}` === row.label);
-    return booking
-      ? { ...row, onClick: () => onOpenBooking(booking.id, booking.status === "in_progress" ? "in_progress" : "confirmed") }
-      : row;
+    if (!row.bookingId) return row;
+    const booking = activeBooked.find((b) => b.id === row.bookingId);
+    return {
+      ...row,
+      onClick: () => onOpenBooking(row.bookingId!, booking?.status === "in_progress" ? "in_progress" : "confirmed"),
+    };
   });
 
   const backdatedRowsLinked = backdatedRows.map((row) => {
-    const booking = byCreatedDate
-      .filter((item) => dateOnly(item.createdAt) > item.date)
-      .find((item) => item.name === row.label && item.date === row.value);
-    return booking
-      ? {
-          ...row,
-          onClick: () =>
-            onOpenBooking(
-              booking.id,
-              booking.status === "cancelled"
-                ? "cancelled"
-                : booking.status === "in_progress"
-                  ? "in_progress"
-                  : booking.status === "new"
-                    ? "new"
-                    : "confirmed",
-            ),
-        }
-      : row;
+    if (!row.bookingId) return row;
+    const booking = byCreatedDate.find((b) => b.id === row.bookingId);
+    return {
+      ...row,
+      onClick: () =>
+        onOpenBooking(
+          row.bookingId!,
+          booking?.status === "cancelled"
+            ? "cancelled"
+            : booking?.status === "in_progress"
+              ? "in_progress"
+              : booking?.status === "new"
+                ? "new"
+                : "confirmed",
+        ),
+    };
   });
 
   
