@@ -21,7 +21,7 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { enrichBooking, formatLabel } from "@/lib/booking";
-import { FIELD_OPTIONS, FieldOption, formatPrice, SECTORS, DURATION_OPTIONS } from "@/lib/constants";
+import { FIELD_OPTIONS, FieldOption, formatPrice, SECTORS, DURATION_OPTIONS, TIME_SLOTS } from "@/lib/constants";
 import { arenaDateValue, bookingEndTime, formatDuration } from "@/lib/time";
 import { BookingRequest, FieldFormat, PaymentRecord, RequestStatus } from "@/lib/types";
 import CalendarPicker from "./CalendarPicker";
@@ -1124,7 +1124,12 @@ function BookingEditor({
           </label>
           <label className="form-field">
             <span>Время</span>
-            <input type="time" step={1800} value={editor.time} onChange={(event) => onChange({ ...editor, time: event.target.value })} />
+            <select value={editor.time} onChange={(event) => onChange({ ...editor, time: event.target.value })}>
+              <option value="">Выберите время</option>
+              {TIME_SLOTS.map((slot) => (
+                <option key={slot} value={slot}>{slot.slice(0, 5)}</option>
+              ))}
+            </select>
           </label>
           <label className="form-field">
             <span>Количество часов</span>
@@ -1450,22 +1455,20 @@ function RepeatPlanner({
         {sourceBookings.length > 0 && (
           <div className="repeat-source-list">
             {sourceBookings.map((booking) => (
-              <label className={`repeat-source-row ${selectedBookingIds.includes(booking.id) ? "selected" : ""}`} key={booking.id}>
-                <span className="repeat-source-check">
+              <div className={`repeat-source-row ${selectedBookingIds.includes(booking.id) ? "selected" : ""}`} key={booking.id}>
+                <label className="schedule-item-label">
                   <input
                     checked={selectedBookingIds.includes(booking.id)}
                     onChange={() => toggleBookingSelection(booking.id)}
                     type="checkbox"
                   />
-                  <span className="repeat-source-checkmark">
-                    <Check size={14} strokeWidth={3} />
-                  </span>
-                </span>
+                  <span className="checkbox-label"></span>
+                </label>
                 <span className="repeat-source-content">
                   <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
                   <span>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</span>
                 </span>
-              </label>
+              </div>
             ))}
           </div>
         )}

@@ -2262,6 +2262,32 @@ a {
   overflow: auto;
 }
 
+.schedule-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.schedule-item-label,
+.trash-item-label {
+  flex-shrink: 0;
+  padding-top: 18px;
+  cursor: pointer;
+}
+
+.schedule-item-label input,
+.trash-item-label input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+.checkbox-label {
+  display: none;
+}
+
 .schedule-card {
   width: 100%;
   display: grid;
@@ -2529,6 +2555,13 @@ a {
 }
 
 .trash-row-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.trash-row-content-inner {
   min-width: 0;
 }
 
@@ -2559,50 +2592,6 @@ a {
 
 .repeat-source-row.selected {
   background: #f5faf7;
-}
-
-.repeat-source-check {
-  position: relative;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
-  display: grid;
-  place-items: center;
-  margin-top: 0;
-}
-
-.repeat-source-check input {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  opacity: 0;
-}
-
-.repeat-source-checkmark {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border: 1px solid #c8d9cf;
-  border-radius: 7px;
-  background: #fff;
-  color: transparent;
-  overflow: hidden;
-}
-
-.repeat-source-check input:checked + .repeat-source-checkmark {
-  border-color: var(--green);
-  background: var(--green);
-  color: #fff;
-}
-
-.repeat-source-checkmark svg {
-  display: block;
-  opacity: 0;
-}
-
-.repeat-source-check input:checked + .repeat-source-checkmark svg {
-  opacity: 1;
 }
 
 .repeat-source-content {
@@ -3226,10 +3215,6 @@ a {
   .repeat-source-row {
     flex-direction: row;
     gap: 10px;
-  }
-
-  .repeat-source-check {
-    margin-top: 0;
   }
 
   .selected-bookings-head {
