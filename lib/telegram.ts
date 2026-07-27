@@ -1,5 +1,5 @@
 import { FIELD_OPTIONS, formatPrice } from "./constants";
-import { getTelegramChats } from "./sheets";
+import { getTelegramChats } from "./db";
 import { bookingEndTime, formatDuration } from "./time";
 import { BookingRequest } from "./types";
 

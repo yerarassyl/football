@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTelegramChats, registerTelegramChat } from "@/lib/sheets";
+import { getTelegramChats, registerTelegramChat } from "@/lib/db";
 import { telegramApi } from "@/lib/telegram";
 
 type TelegramUpdate = {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE, verifyAuthToken } from "@/lib/auth";
-import { BookingConflictError, createRequestIfAvailable, getRequests } from "@/lib/sheets";
+import { BookingConflictError, createRequestIfAvailable, getRequests } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { notifyAdminsAboutBooking } from "@/lib/telegram";
 import { clientIp, consumeRateLimit } from "@/lib/rate-limit";

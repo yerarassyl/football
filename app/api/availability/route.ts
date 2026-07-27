@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRequests } from "@/lib/sheets";
+import { getRequests } from "@/lib/db";
 import { bookingSlots } from "@/lib/time";
 import { isActiveBooking } from "@/lib/booking";
 import { isValidDate } from "@/lib/validation";

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE, verifyAuthToken } from "@/lib/auth";
-import { BookingConflictError, deleteRequest, updateRequest } from "@/lib/sheets";
+import { BookingConflictError, deleteRequest, updateRequest } from "@/lib/db";
 import { readJsonObject, validateBookingPatch, ValidationError } from "@/lib/validation";
 
 export async function PATCH(

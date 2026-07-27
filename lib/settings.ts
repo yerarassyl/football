@@ -1,4 +1,5 @@
 import { FIELD_OPTIONS, FieldOption } from "./constants";
+import { getSupabase, isSupabaseConfigured } from "./supabase";
 import { FieldFormat } from "./types";
 
 export type AppSettings = {
@@ -24,27 +25,8 @@ export const defaultSettings: AppSettings = {
   },
 };
 
-function isAppsScriptConfigured() {
-  return Boolean(process.env.GOOGLE_APPS_SCRIPT_URL && process.env.GOOGLE_APPS_SCRIPT_SECRET);
-}
-
-async function appsScriptSettingsRequest<T>(
-  action: "getSettings" | "updateSettings",
-  payload: Record<string, unknown> = {},
-): Promise<T> {
-  const url = process.env.GOOGLE_APPS_SCRIPT_URL!;
-  const secret = process.env.GOOGLE_APPS_SCRIPT_SECRET!;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, secret, ...payload }),
-    cache: "no-store",
-  });
-
-  if (!response.ok) throw new Error(`Apps Script returned ${response.status}`);
-  const result = await response.json();
-  if (!result.ok) throw new Error(result.error || "Apps Script request failed");
-  return result as T;
+function setCachedSettings(settings: AppSettings): void {
+  globalThis.__airArenaSettingsCache = { value: settings, expiresAt: Date.now() + SETTINGS_CACHE_TTL };
 }
 
 export function applySettingsToFieldOptions(settings: AppSettings): FieldOption[] {
@@ -55,22 +37,35 @@ export function applySettingsToFieldOptions(settings: AppSettings): FieldOption[
 }
 
 export async function getSettings(options: { fresh?: boolean } = {}): Promise<AppSettings> {
-  if (!isAppsScriptConfigured()) return defaultSettings;
+  if (!isSupabaseConfigured()) return defaultSettings;
+
   const cached = globalThis.__airArenaSettingsCache;
   if (!options.fresh && cached && cached.expiresAt > Date.now()) return cached.value;
 
   try {
-    const result = await appsScriptSettingsRequest<{ settings: AppSettings }>("getSettings");
-    const settings = {
+    const supabase = getSupabase()!;
+    const { data, error } = await supabase
+      .from("settings")
+      .select("prices")
+      .eq("id", 1)
+      .single();
+
+    if (error || !data) {
+      console.error("Failed to load settings from Supabase", error);
+      return defaultSettings;
+    }
+
+    const row = data as { prices: Record<string, number> };
+    const prices = row.prices || {};
+    const settings: AppSettings = {
       prices: {
-        ...defaultSettings.prices,
-        ...result.settings?.prices,
+        quarter: Number(prices.quarter) || defaultSettings.prices.quarter,
+        half: Number(prices.half) || defaultSettings.prices.half,
+        full: Number(prices.full) || defaultSettings.prices.full,
       },
     };
-    globalThis.__airArenaSettingsCache = {
-      value: settings,
-      expiresAt: Date.now() + SETTINGS_CACHE_TTL,
-    };
+
+    setCachedSettings(settings);
     return settings;
   } catch (error) {
     console.error("Failed to load settings", error);
@@ -87,12 +82,18 @@ export async function updateSettings(settings: AppSettings): Promise<AppSettings
     },
   };
 
-  if (isAppsScriptConfigured()) {
-    await appsScriptSettingsRequest("updateSettings", { settings: normalized });
+  if (isSupabaseConfigured()) {
+    const supabase = getSupabase()!;
+    const { error } = await supabase
+      .from("settings")
+      .upsert({ id: 1, prices: normalized.prices, updated_at: new Date().toISOString() });
+
+    if (error) {
+      console.error("Failed to update settings in Supabase", error);
+      throw new Error("Не удалось сохранить настройки");
+    }
   }
-  globalThis.__airArenaSettingsCache = {
-    value: normalized,
-    expiresAt: Date.now() + SETTINGS_CACHE_TTL,
-  };
+
+  setCachedSettings(normalized);
   return normalized;
 }

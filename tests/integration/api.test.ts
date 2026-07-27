@@ -7,8 +7,8 @@ const mocks = vi.hoisted(() => ({
   notifyAdminsAboutBooking: vi.fn(),
 }));
 
-vi.mock("@/lib/sheets", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/sheets")>()),
+vi.mock("@/lib/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/db")>()),
   createRequestIfAvailable: mocks.createRequestIfAvailable,
   getRequests: mocks.getRequests,
 }));
