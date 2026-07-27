@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   CircleDollarSign,
   CopyPlus,
+  Download,
   LogOut,
   Plus,
   RotateCcw,
@@ -1936,6 +1937,24 @@ function AnalyticsDashboard({
     { label: "Топ источник", value: sourceStats[0]?.label || "Нет данных", hint: sourceStats[0] ? formatPrice(sourceStats[0].revenue) : "Пока пусто" },
   ];
 
+  const handleExport = async () => {
+    try {
+      const url = `/api/export?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Export failed");
+      const blob = await response.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `bookings_${range.from}_${range.to}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      console.error("Export failed", err);
+    }
+  };
+
   return (
     <>
       <div className="admin-heading">
@@ -1985,6 +2004,9 @@ function AnalyticsDashboard({
               </>
             )}
             <span>{range.from} - {range.to}</span>
+            <button className="analytics-export-btn" onClick={handleExport} type="button" title="Скачать Excel">
+              <Download size={16} /> Скачать XLSX
+            </button>
           </div>
         </div>
       </section>
