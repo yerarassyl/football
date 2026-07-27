@@ -11,7 +11,7 @@ import {
   Trophy,
   UserRound,
 } from "lucide-react";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { DURATION_OPTIONS, FIELD_OPTIONS, FieldOption, formatPrice, SECTORS, TIME_SLOTS } from "@/lib/constants";
 import { normalizeReferralSource, referralDetail } from "@/lib/referrals";
@@ -48,7 +48,6 @@ export default function BookingPage() {
   const [fieldOptions, setFieldOptions] = useState<FieldOption[]>(FIELD_OPTIONS);
   const [selectedDate, setSelectedDate] = useState(todayIso);
   const [selectedTimes, setSelectedTimes] = useState<string[]>([]);
-  const [sector, setSector] = useState("A");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [team, setTeam] = useState("");
@@ -58,6 +57,14 @@ export default function BookingPage() {
   const [successId, setSuccessId] = useState("");
   const [occupiedByTime, setOccupiedByTime] = useState<Record<string, string[]>>({});
   const [photoOpen, setPhotoOpen] = useState(false);
+  const autoSector = useMemo(() => {
+    const busySet = new Set(selectedTimes.flatMap((slot) => occupiedByTime[slot] || []));
+    const available = SECTORS[format].filter((s) => {
+      const parts = s.id.split("+");
+      return !parts.some((p) => busySet.has(p));
+    });
+    return (available[0] || SECTORS[format][0]).id;
+  }, [format, occupiedByTime, selectedTimes]);
 
   // Helper functions for phone number detection and formatting
   function isPhoneNumber(value: string): boolean {
@@ -198,38 +205,12 @@ export default function BookingPage() {
 
   function slotIsBusy(slot: string) {
     const occupied = occupiedByTime[slot] || [];
-    if (format === "full") return occupied.length > 0;
-    if (format === "half") {
-      const leftBusy = occupied.includes("A") || occupied.includes("C");
-      const rightBusy = occupied.includes("B") || occupied.includes("D");
-      return leftBusy && rightBusy;
-    }
-    return ["A", "B", "C", "D"].every((item) => occupied.includes(item));
+    return autoSector.split("+").some((p) => occupied.includes(p));
   }
-
-  const availableSectors = SECTORS[format].map((item) => {
-    const parts = item.id.split("+");
-    return { ...item, busy: parts.some((part) => busySectors.includes(part)) };
-  });
 
   function changeFormat(value: FieldFormat) {
     setFormat(value);
-    setSector(SECTORS[value][0].id);
     setSelectedTimes([]);
-  }
-
-  function sectorForFieldPart(part: string) {
-    if (format === "full") return "A+B+C+D";
-    if (format === "half") return part === "A" || part === "C" ? "A+C" : "B+D";
-    return part;
-  }
-
-  function chooseSectorFromField(part: string) {
-    if (!duration) return;
-    const nextSector = sectorForFieldPart(part);
-    const option = availableSectors.find((item) => item.id === nextSector);
-    if (!option || option.busy) return;
-    setSector(nextSector);
   }
 
   function slotsBetween(start: string, end: string) {
@@ -308,9 +289,8 @@ export default function BookingPage() {
   }
 
   const valid =
-    Boolean(startTime && duration >= 60 && sector && name.trim().length > 1) &&
-    phone.replace(/\D/g, "").length >= 10 &&
-    !availableSectors.find((item) => item.id === sector)?.busy;
+    Boolean(startTime && duration >= 60 && autoSector && name.trim().length > 1) &&
+    phone.replace(/\D/g, "").length >= 10;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -325,7 +305,7 @@ export default function BookingPage() {
           time: startTime,
           duration,
           format,
-          sector,
+          sector: autoSector,
           price: totalPrice,
           name,
           phone,
@@ -543,46 +523,30 @@ export default function BookingPage() {
                   <div className="section-heading">
                     <div>
                       <div className="section-kicker">Шаг 3</div>
-                      <h2>Выберите сектор</h2>
-                      <p>{duration ? "Доступность для всех выбранных часов" : startTime ? "Теперь нажмите время окончания" : "Сначала выберите время игры"}</p>
+                      <h2>Сектор поля</h2>
+                      <p>Сектор назначается автоматически по формату поля</p>
                     </div>
                   </div>
                   <div className="field-select-layout">
                     <div className="field-visual">
                       {["A", "B", "C", "D"].map((item) => {
-                        const fieldSector = sectorForFieldPart(item);
-                        const option = availableSectors.find((sectorOption) => sectorOption.id === fieldSector);
-                        const selected = sector.split("+").includes(item);
-                        const busy = Boolean(option?.busy || busySectors.includes(item));
+                        const selected = autoSector.split("+").includes(item);
+                        const busy = busySectors.includes(item);
                         return (
-                          <button
+                          <span
                             className={`field-sector ${busy ? "busy" : ""} ${selected ? "selected" : ""}`}
-                            disabled={!duration || busy}
                             key={item}
-                            onClick={() => chooseSectorFromField(item)}
-                            type="button"
                           >
                             {item}
-                          </button>
+                          </span>
                         );
                       })}
                     </div>
-                    <div className="sector-options">
-                      {availableSectors.map((item) => (
-                        <button
-                          className={`sector-option ${sector === item.id ? "selected" : ""}`}
-                          disabled={!duration || item.busy}
-                          key={item.id}
-                          onClick={() => setSector(item.id)}
-                          type="button"
-                        >
-                          <span>
-                            {sector === item.id && !item.busy ? <CheckCircle2 size={17} /> : <span style={{ width: 17 }} />}
-                            {item.label}
-                          </span>
-                          <small>{item.busy ? "Занято" : "Свободно"}</small>
-                        </button>
-                      ))}
+                    <div className="auto-sector-info">
+                      <span className="auto-sector-badge">
+                        {SECTORS[format].find((s) => s.id === autoSector)?.label || autoSector}
+                      </span>
+                      <small>Назначен автоматически</small>
                     </div>
                   </div>
                   {startTime && (
@@ -646,7 +610,7 @@ export default function BookingPage() {
                   <div className="summary-row"><span>Дата</span><strong>{formatDate(selectedDate)}</strong></div>
                   <div className="summary-row"><span>Время</span><strong>{startTime ? `${startTime}–${bookingEndTime(startTime, duration)}` : "Не выбрано"}</strong></div>
                   <div className="summary-row"><span>Длительность</span><strong>{duration ? formatDuration(duration) : "Не выбрано"}</strong></div>
-                  <div className="summary-row"><span>Сектор</span><strong>{sector}</strong></div>
+                  <div className="summary-row"><span>Сектор</span><strong>{autoSector || "—"}</strong></div>
                   <div className="summary-total"><span>Стоимость</span><strong>{formatPrice(totalPrice)}</strong></div>
                   <button className="primary-button" disabled={!valid || loading} type="submit">
                     {loading ? "Отправляем..." : "Подтвердить заявку"} {!loading && <ArrowRight size={16} />}
