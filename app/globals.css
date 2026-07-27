@@ -2568,6 +2568,27 @@ a {
   color: var(--green);
 }
 
+.payment-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--ink-light);
+  cursor: pointer;
+  padding: 0;
+  margin-left: auto;
+}
+
+.payment-delete-btn:hover {
+  color: var(--red);
+  border-color: #f0d1cd;
+  background: var(--red-soft);
+}
+
 .payment-add-form {
   margin-top: 16px;
   padding-top: 16px;

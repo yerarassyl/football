@@ -453,6 +453,20 @@ export default function AdminDashboard() {
     }
   }
 
+  async function deletePayment(paymentId: string) {
+    if (!selectedBooking) return;
+    setSaving(true);
+    try {
+      const payments = selectedBooking.payments.filter((p) => p.id !== paymentId);
+      await persistPatch(selectedBooking.id, { payments });
+      showNotice("success", "Оплата удалена");
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function moveToTrash(id: string) {
     if (!window.confirm("Переместить эту бронь в корзину?")) return;
     try {
@@ -813,6 +827,7 @@ export default function AdminDashboard() {
                 fieldOptions={fieldOptions}
                 mobileView={showMobileDetails}
                 onAddPayment={addPayment}
+                onDeletePayment={deletePayment}
                 onBack={() => {
                   setCreateMode(false);
                   setSelectedId("");
@@ -956,6 +971,7 @@ export default function AdminDashboard() {
                 fieldOptions={fieldOptions}
                 mobileView={showMobileDetails}
                 onAddPayment={addPayment}
+                onDeletePayment={deletePayment}
                 onBack={() => {
                   setCreateMode(false);
                   setSelectedId("");
@@ -1059,6 +1075,7 @@ function BookingEditor({
   fieldOptions,
   mobileView,
   onAddPayment,
+  onDeletePayment,
   onBack,
   onChange,
   onDelete,
@@ -1072,6 +1089,7 @@ function BookingEditor({
   fieldOptions:FieldOption[];
   mobileView:boolean;
   onAddPayment:(payment:Omit<PaymentRecord,"id">)=>Promise<void>;
+  onDeletePayment:(paymentId:string)=>Promise<void>;
   onBack:()=>void;
   onChange:(editor:EditorState)=>void;
   onDelete:()=>void;
@@ -1248,6 +1266,7 @@ function BookingEditor({
                 <span>{payment.date || "Без даты"}</span>
                 <span>{payment.method}</span>
                 <span>{payment.recipient}</span>
+                <button className="payment-delete-btn" title="Удалить оплату" type="button" disabled={saving} onClick={() => void onDeletePayment(payment.id)}><Trash2 size={14} /></button>
               </div>
             ))}
           </div>
