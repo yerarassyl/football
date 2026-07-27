@@ -1838,7 +1838,7 @@ function AnalyticsDashboard({
   );
 
   const overdueRows: AnalyticsRow[] = allConfirmed
-    .filter((item) => item.balance > 0 && item.date < today)
+    .filter((item) => item.balance > 0 && item.date <= today)
     .sort((a, b) => b.balance - a.balance)
     .slice(0, 8)
     .map((item) => ({
