@@ -33,7 +33,6 @@ describe("booking validation", () => {
     [{ ...validBooking, format: "unknown" }, "формат"],
     [{ ...validBooking, sector: "A+B" }, "Сектор"],
     [{ ...validBooking, phone: "123" }, "Телефон"],
-    [{ ...validBooking, time: "23:30", duration: 60 }, "завершиться"],
   ])("rejects invalid payload %#", (payload, message) => {
     expect(() => validateBookingCreate(payload)).toThrow(message);
   });

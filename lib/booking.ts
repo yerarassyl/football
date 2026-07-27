@@ -1,7 +1,7 @@
 import { BookingRequest, FieldFormat, PaymentRecord, PaymentStatus, RequestStatus } from "./types";
 import { bookingEndTime, bookingSlots } from "./time";
 
-const ACTIVE_STATUSES: RequestStatus[] = ["new", "in_progress", "confirmed"];
+const ACTIVE_STATUSES: RequestStatus[] = ["in_progress", "confirmed"];
 const QUARTERS = ["A", "B", "C", "D"] as const;
 
 export function formatLabel(format: FieldFormat) {

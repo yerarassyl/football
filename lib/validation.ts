@@ -82,13 +82,7 @@ function validDuration(value: unknown, time?: string) {
   if (!Number.isInteger(duration) || duration < 60 || duration % 30 !== 0) {
     throw new ValidationError("Длительность должна быть от 1 часа с шагом 30 минут");
   }
-  if (time) {
-    const startMinutes = timeToMinutes(time);
-    const endMinutes = startMinutes + duration;
-    if (endMinutes > 24 * 60) {
-      throw new ValidationError("Бронь не может завершиться после полуночи");
-    }
-  }
+  // Длительность не ограничена по времени суток
   return duration;
 }
 

@@ -35,7 +35,7 @@ const months = [
 ];
 
 const todayIso = arenaDateValue();
-const arenaPhone = "+7 700 200 40 02";
+const arenaPhone = "+7 702 753 75 14";
 const arenaMapUrl = "https://2gis.kz/astana/search/%D0%A2%D1%83%D1%80%D0%B0%D0%BD%2090%D0%B0";
 
 function formatDate(iso: string) {
@@ -47,7 +47,8 @@ export default function BookingPage() {
   const [format, setFormat] = useState<FieldFormat>("quarter");
   const [fieldOptions, setFieldOptions] = useState<FieldOption[]>(FIELD_OPTIONS);
   const [selectedDate, setSelectedDate] = useState(todayIso);
-  const [selectedTimes, setSelectedTimes] = useState<string[]>([]);
+  const [startTime, setStartTime] = useState("");
+  const [duration, setDuration] = useState(0);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [team, setTeam] = useState("");
@@ -57,14 +58,22 @@ export default function BookingPage() {
   const [successId, setSuccessId] = useState("");
   const [occupiedByTime, setOccupiedByTime] = useState<Record<string, string[]>>({});
   const [photoOpen, setPhotoOpen] = useState(false);
+  const selectedSlots = useMemo(() => {
+    if (!startTime || !duration || duration < 60) return [];
+    const count = Math.ceil(duration / 30);
+    const idx = TIME_SLOTS.indexOf(startTime);
+    if (idx === -1) return [];
+    return Array.from({ length: count }, (_, i) => TIME_SLOTS[(idx + i) % TIME_SLOTS.length]);
+  }, [startTime, duration]);
+
   const autoSector = useMemo(() => {
-    const busySet = new Set(selectedTimes.flatMap((slot) => occupiedByTime[slot] || []));
+    const busySet = new Set(selectedSlots.flatMap((slot) => occupiedByTime[slot] || []));
     const available = SECTORS[format].filter((s) => {
       const parts = s.id.split("+");
       return !parts.some((p) => busySet.has(p));
     });
     return (available[0] || SECTORS[format][0]).id;
-  }, [format, occupiedByTime, selectedTimes]);
+  }, [format, occupiedByTime, selectedSlots]);
 
   // Helper functions for phone number detection and formatting
   function isPhoneNumber(value: string): boolean {
@@ -102,19 +111,16 @@ export default function BookingPage() {
   // --- End of helpers ---
 
   const option = fieldOptions.find((item) => item.id === format)!;
-  const startTime = selectedTimes[0] || "";
-  const duration = selectedTimes.length >= 2 ? selectedTimes.length * 30 : 0;
-  const endTime = duration ? bookingEndTime(startTime, duration) : "";
+  const endTime = duration && startTime ? bookingEndTime(startTime, duration) : "";
   const totalPrice = Math.round(option.price * (duration / 60));
   const busySectors = Array.from(
-    new Set(selectedTimes.flatMap((slot) => occupiedByTime[slot] || [])),
+    new Set(selectedSlots.flatMap((slot) => occupiedByTime[slot] || [])),
   );
   const startIndex = startTime ? TIME_SLOTS.indexOf(startTime) : -1;
-  const maxDurationSlots = startIndex === -1
-    ? 0
-    : TIME_SLOTS.slice(startIndex).findIndex((slot) => slotIsBusy(slot)) === -1
-      ? TIME_SLOTS.length - startIndex
-      : TIME_SLOTS.slice(startIndex).findIndex((slot) => slotIsBusy(slot));
+  const nextBusy = startIndex === -1 ? null : TIME_SLOTS.slice(startIndex).findIndex((slot) => slotIsBusy(slot));
+  const maxDurationSlots = nextBusy === -1 || nextBusy === null
+    ? TIME_SLOTS.length
+    : nextBusy;
   const durationOptions = DURATION_OPTIONS.filter((minutes) => minutes / 30 <= maxDurationSlots);
 
   useEffect(() => {
@@ -210,78 +216,34 @@ export default function BookingPage() {
 
   function changeFormat(value: FieldFormat) {
     setFormat(value);
-    setSelectedTimes([]);
+    setStartTime("");
+    setDuration(0);
   }
 
-  function slotsBetween(start: string, end: string) {
-    const startIndex = TIME_SLOTS.indexOf(start);
-    const endIndex = TIME_SLOTS.indexOf(end);
-    if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) return [];
-    return TIME_SLOTS.slice(startIndex, endIndex);
-  }
-
-  function canUseAsEnd(slot: string) {
-    if (!startTime || selectedTimes.length !== 1) return false;
-    const range = slotsBetween(startTime, slot);
-    return range.length >= 2 && !range.some((item) => slotIsBusy(item));
-  }
-
-  function selectTime(slot: string) {
-    const busy = slotIsBusy(slot);
-    const selectableEnd = canUseAsEnd(slot);
-
-    if (!startTime || selectedTimes.length >= 2) {
-      if (busy) return;
-      setSelectedTimes([slot]);
+  function handleStartChange(slot: string) {
+    if (!slot) {
+      setStartTime("");
+      setDuration(0);
       return;
     }
-
-    if (slot === startTime) {
-      setSelectedTimes([]);
-      return;
+    const idx = TIME_SLOTS.indexOf(slot);
+    if (idx === -1 || slotIsBusy(slot)) return;
+    setStartTime(slot);
+    // Keep existing duration if it still fits, otherwise reset
+    if (duration >= 60) {
+      const slotsNeeded = Math.ceil(duration / 30);
+      const range: string[] = [];
+      for (let i = 0; i < slotsNeeded; i++) {
+        range.push(TIME_SLOTS[(idx + i) % TIME_SLOTS.length]);
+      }
+      if (range.some((s) => slotIsBusy(s))) {
+        setDuration(0);
+      }
     }
-
-    const startIndex = TIME_SLOTS.indexOf(startTime);
-    const endIndex = TIME_SLOTS.indexOf(slot);
-    if (endIndex <= startIndex) {
-      if (busy) return;
-      setSelectedTimes([slot]);
-      return;
-    }
-    if (busy && !selectableEnd) return;
-
-    const minEndIndex = startIndex + 2;
-    const nextEnd = TIME_SLOTS[Math.max(endIndex, minEndIndex)];
-    if (!nextEnd) {
-      setSelectedTimes([startTime]);
-      return;
-    }
-
-    const next = slotsBetween(startTime, nextEnd);
-    if (next.length >= 2 && !next.some((item) => slotIsBusy(item))) {
-      setSelectedTimes(next);
-    }
-  }
-
-  function setTimeRange(slot: string, minutes = Math.max(duration, 60)) {
-    const index = TIME_SLOTS.indexOf(slot);
-    if (index === -1 || slotIsBusy(slot)) {
-      setSelectedTimes([]);
-      return;
-    }
-
-    const slotsCount = Math.max(2, Math.ceil(minutes / 30));
-    const next = TIME_SLOTS.slice(index, index + slotsCount);
-    if (next.length < slotsCount || next.some((item) => slotIsBusy(item))) {
-      setSelectedTimes([slot]);
-      return;
-    }
-    setSelectedTimes(next);
   }
 
   function changeDuration(minutes: number) {
-    if (!startTime) return;
-    setTimeRange(startTime, minutes);
+    setDuration(minutes);
   }
 
   function changePhone(value: string) {
@@ -316,7 +278,8 @@ export default function BookingPage() {
       });
       if (response.status === 409) {
         await loadAvailability();
-        setSelectedTimes([]);
+        setStartTime("");
+        setDuration(0);
         alert("Это время уже занято другой заявкой. Выберите свободные часы.");
         return;
       }
@@ -339,8 +302,8 @@ export default function BookingPage() {
           Air Arena
         </a>
         <div className="header-actions">
-          <a className="phone-link" href="tel:+77002004002"><Phone size={15} /> {arenaPhone}</a>
-          <a className="phone-link" href="https://wa.me/77002004002" target="_blank" rel="noreferrer">WhatsApp</a>
+          <a className="phone-link" href="tel:+77027537514"><Phone size={15} /> {arenaPhone}</a>
+          <a className="phone-link" href="https://wa.me/77027537514" target="_blank" rel="noreferrer">WhatsApp</a>
         </div>
       </header>
 
@@ -355,7 +318,7 @@ export default function BookingPage() {
             <div className="hero-pills">
               <a className="hero-pill" href={arenaMapUrl} target="_blank" rel="noreferrer"><MapPin size={12} /> Астана, ул. Туран, 90а</a>
               <span className="hero-pill"><Clock3 size={12} /> Ежедневно 24/7</span>
-              <a className="hero-pill" href="tel:+77002004002"><Phone size={12} /> {arenaPhone}</a>
+              <a className="hero-pill" href="tel:+77027537514"><Phone size={12} /> {arenaPhone}</a>
             </div>
           </div>
         </section>
@@ -440,7 +403,7 @@ export default function BookingPage() {
                     <div>
                       <div className="section-kicker">Шаг 2</div>
                       <h2>Дата и время</h2>
-                      <p>Красным отмечены уже занятые слоты</p>
+                      <p>Выберите удобное время для игры</p>
                     </div>
                     <CalendarDays size={22} color="#176b45" />
                   </div>
@@ -448,18 +411,18 @@ export default function BookingPage() {
                     <div className="date-time-label"><CalendarDays size={17} /><strong>Дата</strong></div>
                     <CalendarPicker
                       value={selectedDate}
-                      onChange={(date) => { setSelectedDate(date); setSelectedTimes([]); }}
+                      onChange={(date) => { setSelectedDate(date); setStartTime(""); setDuration(0); }}
                     />
                   </div>
                   <div className="date-time-part time-part">
-                    <div className="date-time-label"><Clock3 size={17} /><strong>Время</strong><small>Минимум 1 час, шаг 30 минут. Можно выбрать несколько слотов подряд.</small></div>
+                    <div className="date-time-label"><Clock3 size={17} /><strong>Время</strong><small>Минимум 1 час, шаг 30 минут</small></div>
                     <div className="time-picker-panel">
                       <div className="form-field">
                         <label htmlFor="start-time">Начало</label>
                         <select
                           id="start-time"
                           value={startTime}
-                          onChange={(event) => setTimeRange(event.target.value, duration || 60)}
+                          onChange={(event) => handleStartChange(event.target.value)}
                         >
                           <option value="">Выберите время</option>
                           {TIME_SLOTS.map((slot, index) => (
@@ -484,38 +447,6 @@ export default function BookingPage() {
                         </select>
                       </div>
                     </div>
-                    <div className="duration-quick-row">
-                      {DURATION_OPTIONS.slice(0, 7).map((minutes) => (
-                        <button
-                          className={duration === minutes ? "selected" : ""}
-                          disabled={!startTime || !durationOptions.includes(minutes)}
-                          key={minutes}
-                          onClick={() => changeDuration(minutes)}
-                          type="button"
-                        >
-                          {formatDuration(minutes)}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="slots-grid">
-                      {TIME_SLOTS.map((slot) => {
-                        const busy = slotIsBusy(slot);
-                        const selectableEnd = canUseAsEnd(slot);
-                        const isBoundary = endTime === slot;
-                        const visuallyBusy = busy && !selectableEnd && !isBoundary;
-                        return (
-                          <button
-                            className={`slot ${slot.endsWith(":30") ? "half-hour" : ""} ${selectedTimes.includes(slot) || isBoundary ? "selected" : ""} ${isBoundary ? "range-boundary" : ""} ${visuallyBusy ? "busy" : ""}`}
-                            disabled={visuallyBusy}
-                            key={slot}
-                            onClick={() => selectTime(slot)}
-                            type="button"
-                          >
-                            {slot}
-                          </button>
-                        );
-                      })}
-                    </div>
                   </div>
                 </section>
 
@@ -523,44 +454,6 @@ export default function BookingPage() {
                   <div className="section-heading">
                     <div>
                       <div className="section-kicker">Шаг 3</div>
-                      <h2>Сектор поля</h2>
-                      <p>Сектор назначается автоматически по формату поля</p>
-                    </div>
-                  </div>
-                  <div className="field-select-layout">
-                    <div className="field-visual">
-                      {["A", "B", "C", "D"].map((item) => {
-                        const selected = autoSector.split("+").includes(item);
-                        const busy = busySectors.includes(item);
-                        return (
-                          <span
-                            className={`field-sector ${busy ? "busy" : ""} ${selected ? "selected" : ""}`}
-                            key={item}
-                          >
-                            {item}
-                          </span>
-                        );
-                      })}
-                    </div>
-                    <div className="auto-sector-info">
-                      <span className="auto-sector-badge">
-                        {SECTORS[format].find((s) => s.id === autoSector)?.label || autoSector}
-                      </span>
-                      <small>Назначен автоматически</small>
-                    </div>
-                  </div>
-                  {startTime && (
-                    <div className="inline-price-total">
-                      <span>{formatDuration(duration)} · {startTime}–{bookingEndTime(startTime, duration)}</span>
-                      <strong>{formatPrice(totalPrice)}</strong>
-                    </div>
-                  )}
-                </section>
-
-                <section className="section-block">
-                  <div className="section-heading">
-                    <div>
-                      <div className="section-kicker">Шаг 4</div>
                       <h2>Контактные данные</h2>
                       <p>Администратор позвонит для подтверждения заявки</p>
                     </div>
@@ -618,6 +511,26 @@ export default function BookingPage() {
                   <p className="fine-print">
                     Нажимая кнопку, вы соглашаетесь на обработку персональных данных.
                     Заявка не является подтверждённой бронью.
+                  </p>
+                  <p className="fine-print" style={{marginTop: 10}}>
+                    Сектор поля: {SECTORS[format].find((s) => s.id === autoSector)?.label || autoSector}
+                  </p>
+                  <div className="field-visual" style={{justifyContent: "center", marginTop: 6}}>
+                    {["A", "B", "C", "D"].map((item) => {
+                      const selected = autoSector.split("+").includes(item);
+                      const busy = busySectors.includes(item);
+                      return (
+                        <span
+                          className={`field-sector ${busy ? "busy" : ""} ${selected ? "selected" : ""}`}
+                          key={item}
+                        >
+                          {item}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p className="fine-print fine-print-muted">
+                    Сектор назначается автоматически по формату поля
                   </p>
                 </div>
               </aside>

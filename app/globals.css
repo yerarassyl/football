@@ -1048,6 +1048,12 @@ a {
   line-height: 1.5;
 }
 
+.fine-print-muted {
+  margin-top: 2px;
+  font-size: 8px;
+  opacity: 0.65;
+}
+
 .success-panel {
   padding: 45px 24px;
   text-align: center;
@@ -1236,11 +1242,11 @@ a {
 .admin-sidebar nav button,
 .logout-button {
   width: 100%;
-  min-height: 44px;
+  min-height: 42px;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 0 12px;
+  gap: 10px;
+  padding: 0 14px;
   color: rgba(255, 255, 255, 0.65);
   text-align: left;
   border: 0;
@@ -1255,30 +1261,26 @@ a {
   background: rgba(255, 255, 255, 0.1);
 }
 
-.admin-sidebar nav button > span {
-  min-width: 22px;
-  padding: 3px 6px;
-  margin-left: auto;
+.admin-sidebar .nav-label {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  font-size: inherit;
+  font-weight: inherit;
+  background: transparent;
+  border-radius: 0;
+}
+
+.admin-sidebar .nav-badge {
+  min-width: 20px;
+  padding: 2px 6px;
+  flex-shrink: 0;
   color: var(--green-dark);
   text-align: center;
   border-radius: 99px;
   background: var(--lime);
-  font-size: 9px;
-}
-
-.admin-sidebar .nav-label {
-  min-width: 0;
-  text-align: left;
-}
-
-.admin-sidebar .nav-badge {
-  min-width: 0;
-  padding: 0;
-  margin-left: auto;
-  color: rgba(255, 255, 255, 0.55);
-  text-align: right;
-  border-radius: 0;
-  background: transparent;
   font-size: 10px;
   font-weight: 600;
 }
@@ -1294,7 +1296,7 @@ a {
 
 .admin-main {
   min-width: 0;
-  padding: 42px;
+  padding: 28px;
 }
 
 .admin-toast {
@@ -2015,7 +2017,15 @@ a {
   flex-wrap: wrap;
 }
 
-.analytics-range select,
+.analytics-range select {
+  min-height: 38px;
+  min-width: 130px;
+  padding: 0 42px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background-color: var(--white);
+  font-size: 11px;
+}
 .analytics-range input {
   min-height: 38px;
   padding: 0 10px;
@@ -2210,7 +2220,23 @@ a {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: center;
 }
+
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.batch-toolbar > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 4px;
+}
+
 
 .admin-schedule-grid {
   display: grid;
@@ -2737,7 +2763,7 @@ a {
   }
 
   .admin-main {
-    padding: 25px;
+    padding: 18px 25px;
   }
 
   .date-strip {
@@ -2969,8 +2995,8 @@ a {
 
   .admin-sidebar nav {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 4px;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 3px;
     width: 100%;
     min-width: 0;
     align-items: stretch;
@@ -2986,17 +3012,23 @@ a {
     position: relative;
     width: 100%;
     min-width: 0;
-    min-height: 58px;
+    min-height: 56px;
     flex-direction: column;
+    align-items: center;
     justify-content: center;
-    gap: 5px;
-    padding: 7px 5px 8px;
+    gap: 2px;
+    padding: 8px 3px 6px;
     color: rgba(255, 255, 255, 0.8);
     border-radius: 13px;
     background: rgba(255, 255, 255, 0.04);
-    font-size: 9px;
+    font-size: 8px;
     text-align: center;
     white-space: normal;
+  }
+
+  .admin-sidebar nav button > svg {
+    flex-shrink: 0;
+    display: block;
   }
 
   .admin-sidebar nav button.mobile-all-nav {
@@ -3027,6 +3059,7 @@ a {
     border-radius: 0;
     background: transparent;
     text-align: left;
+    text-align: center;
     text-overflow: ellipsis;
   }
 
@@ -3047,14 +3080,14 @@ a {
     position: absolute;
     top: 6px;
     right: 6px;
-    min-width: 0;
-    padding: 0;
+    min-width: 18px;
+    padding: 2px 5px;
     margin-left: 0;
-    color: rgba(255, 255, 255, 0.55);
+    color: var(--green-dark);
     font-size: 9px;
     line-height: 1.1;
-    border-radius: 0;
-    background: transparent;
+    border-radius: 99px;
+    background: var(--lime);
   }
 
   .admin-sidebar nav button > span:not(.nav-label):not(.nav-badge) {
@@ -3214,6 +3247,8 @@ a {
 
   .schedule-head-actions,
   .schedule-head-actions .secondary-button,
+  .schedule-head-actions .primary-button,
+  .schedule-head-actions .danger-button,
   .editor-actions > *,
   .trash-actions > * {
     width: 100%;

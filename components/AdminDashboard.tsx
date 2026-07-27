@@ -8,9 +8,7 @@ import {
   CircleDollarSign,
   CopyPlus,
   LogOut,
-  ListChecks,
   Plus,
-  RefreshCcw,
   RotateCcw,
   Save,
   Search,
@@ -152,7 +150,7 @@ function defaultEditor(date: string, fieldOptions: FieldOption[]): EditorState {
     sourceDetail: "",
     salePricePerHour: String(calculateListPrice(fieldOptions, format, duration) / (duration / 60)), // per hour
     comment: "",
-    status: "confirmed", // default to confirmed as requested
+    status: "new",
   };
 }
 
@@ -219,18 +217,22 @@ export default function AdminDashboard() {
         : [...prev, id]
     );
 
-    // When selecting via checkbox, also set as single selected item for details
-    setSelectedId(id);
+    // On desktop, also show details for the selected item
+    if (!isMobile) {
+      setSelectedId(id);
+    }
   }
 
   // Select all visible items
   function selectAllVisible(visibleIds: string[]) {
     setSelectedIds([...visibleIds]);
-    // Set first item as single selection for details if any selected
-    if (visibleIds.length > 0) {
-      setSelectedId(visibleIds[0]);
-    } else {
-      setSelectedId("");
+    // On desktop, also show details for the first selected item
+    if (!isMobile) {
+      if (visibleIds.length > 0) {
+        setSelectedId(visibleIds[0]);
+      } else {
+        setSelectedId("");
+      }
     }
   }
 
@@ -239,6 +241,11 @@ export default function AdminDashboard() {
     setSelectedIds([]);
     setSelectedId("");
   }
+
+  useEffect(() => {
+    clearSelection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   async function load() {
     setLoading(true);
@@ -306,7 +313,7 @@ export default function AdminDashboard() {
 
   // Filtered bookings for schedule view (excluding deleted)
   const scheduleBookings = useMemo(() => {
-    const active = bookings.filter((item) => item.status !== "deleted");
+    const active = bookings.filter((item) => item.status !== "deleted" && item.status !== "new");
     const source = query.trim()
       ? active.filter((item) => matchQuery(item, query))
       : active.filter((item) => item.date === selectedDate);
@@ -565,6 +572,23 @@ export default function AdminDashboard() {
     }
   }
 
+  async function deleteSelectedForever() {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Удалить ${selectedIds.length} выбранных броней навсегда? Это действие нельзя отменить.`)) return;
+
+    try {
+      const deletes = selectedIds.map(id =>
+        fetch(`/api/bookings/${id}`, { method: "DELETE" })
+      );
+      await Promise.all(deletes);
+      setBookings((current) => current.filter((item) => !selectedIds.includes(item.id)));
+      showNotice("success", `Удалено ${selectedIds.length} броней`);
+      clearSelection();
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    }
+  }
+
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/admin/login";
@@ -640,40 +664,20 @@ export default function AdminDashboard() {
           <span className="brand-mark"><Trophy size={18} /></span> Air Arena
         </Link>
         <nav>
-          {queueTabs.map((item) => {
-            const Icon = item.icon;
-            const count = bookings.filter((booking) => booking.status === item.status).length;
-            return (
-              <button className={`desktop-queue-nav ${tab === item.tab ? "active" : ""}`} key={item.tab} onClick={() => setTab(item.tab)}>
-                <Icon size={18} />
-                <span
-                  className="nav-label"
-                  data-short={
-                    item.status === "new"
-                      ? "Новые"
-                      : item.status === "confirmed"
-                      ? "Подтв."
-                      : ""
-                  }
-                >
-                  {item.label}
-                </span>
-                <span className="nav-badge">{count}</span>
-              </button>
-            );
-          })}
-          <button
-            className={`mobile-all-nav ${(currentQueue || tab === "trash") ? "active" : ""}`}
-            onClick={() => openMobileBookings(currentQueue?.tab || (tab === "trash" ? "trash" : "status:new"))}
-            type="button"
-          >
-            <ListChecks size={18} />
-            <span className="nav-label" data-short="Все">Все заявки</span>
+          <button className={tab === "status:new" ? "active" : ""} onClick={() => setTab("status:new")}>
+            <Plus size={18} />
+            <span className="nav-label" data-short="Новые">Новые</span>
+            <span className="nav-badge">{bookings.filter((booking) => booking.status === "new").length}</span>
+          </button>
+          <button className={tab === "status:confirmed" ? "active" : ""} onClick={() => setTab("status:confirmed")}>
+            <Check size={18} />
+            <span className="nav-label" data-short="Подтв.">Подтвержденные</span>
+            <span className="nav-badge">{bookings.filter((booking) => booking.status === "confirmed").length}</span>
           </button>
           <button className={tab === "schedule" ? "active" : ""} onClick={() => setTab("schedule")}>
             <CalendarDays size={18} />
             <span className="nav-label" data-short="День">График</span>
-            <span className="nav-badge">{bookings.filter(b => b.status !== "deleted").length}</span>
+            <span className="nav-badge">{bookings.filter(b => b.status === "confirmed" && b.date === today).length}</span>
           </button>
           <button className={tab === "trash" ? "active" : ""} onClick={() => setTab("trash")}>
             <Trash2 size={18} />
@@ -725,7 +729,7 @@ export default function AdminDashboard() {
                   )}
                 </div>
                 <button
-                  className="secondary-button"
+                  className="primary-button"
                   onClick={() => {
                     setCreateMode(true);
                     setSelectedId("");
@@ -734,9 +738,6 @@ export default function AdminDashboard() {
                   type="button"
                 >
                   <Plus size={16} /> Новая бронь
-                </button>
-                <button className="secondary-button" onClick={() => void load()} type="button">
-                  <RefreshCcw size={16} /> Обновить
                 </button>
               </div>
             </div>
@@ -849,50 +850,36 @@ export default function AdminDashboard() {
                   {selectedIds.length > 0 && (
                     <div className="batch-toolbar">
                       <span>{selectedIds.length} выбрано</span>
+                      {tab !== "status:confirmed" && !tab.startsWith("status:cancelled") && (
+                        <button className="secondary-button" onClick={confirmSelected}>
+                          <Check size={16} /> Подтвердить выбранные
+                        </button>
+                      )}
                       {!tab.startsWith("status:cancelled") && (
-                        <>
-                          <button className="secondary-button" onClick={confirmSelected}>
-                            <Check size={16} /> Подтвердить выбранные
-                          </button>
-                          <button className="danger-button" onClick={trashSelected}>
-                            <Trash2 size={16} /> В корзину
-                          </button>
-                        </>
+                        <button className="danger-button" onClick={trashSelected}>
+                          <Trash2 size={16} /> В корзину
+                        </button>
                       )}
-                      {tab === "trash" && (
-                        <>
-                          <button className="secondary-button" onClick={restoreSelected}>
-                            <RotateCcw size={16} /> Восстановить из корзину
-                          </button>
-                          <button className="secondary-button" onClick={clearSelection}>
-                            <X size={16} /> Очистить выбор
-                          </button>
-                        </>
-                      )}
+                      <button className="secondary-button" onClick={clearSelection}>
+                        <X size={16} /> Очистить выбор
+                      </button>
                     </div>
                   )}
                 </div>
-                <button className="secondary-button" onClick={() => void load()} type="button">
-                  <RefreshCcw size={16} /> Обновить
-                </button>
+                {(tab === "status:new" || tab === "status:confirmed") && (
+                  <button
+                    className="primary-button"
+                    onClick={() => {
+                      setCreateMode(true);
+                      setSelectedId("");
+                      setEditor(defaultEditor(today, fieldOptions));
+                    }}
+                    type="button"
+                  >
+                    <Plus size={16} /> Новая бронь
+                  </button>
+                )}
               </div>
-            </div>
-
-            <div className="mobile-booking-tabs" aria-label="Фильтр заявок">
-              {queueTabs.map((item) => (
-                <button
-                  className={tab === item.tab ? "active" : ""}
-                  aria-pressed={tab === item.tab}
-                  key={item.tab}
-                  onClick={() => openMobileBookings(item.tab)}
-                  type="button"
-                >
-                  {item.label}<span>{bookings.filter((booking) => booking.status === item.status).length}</span>
-                </button>
-              ))}
-              <button aria-pressed={false} onClick={() => openMobileBookings("trash")} type="button">
-                Корзина<span>{bookings.filter((booking) => booking.status === "deleted").length}</span>
-              </button>
             </div>
 
             <div className={`admin-schedule-grid ${showMobileDetails ? "mobile-detail-mode" : ""}`}>
@@ -991,16 +978,24 @@ export default function AdminDashboard() {
                 <h1>Удаленные брони</h1>
                 <p>Можно восстановить бронь или удалить запись из Google Sheets навсегда.</p>
               </div>
-            </div>
-            <div className="mobile-booking-tabs" aria-label="Фильтр заявок">
-              {queueTabs.map((item) => (
-                <button aria-pressed={false} key={item.tab} onClick={() => openMobileBookings(item.tab)} type="button">
-                  {item.label}<span>{bookings.filter((booking) => booking.status === item.status).length}</span>
-                </button>
-              ))}
-              <button aria-pressed="true" className="active" onClick={() => openMobileBookings("trash")} type="button">
-                Корзина<span>{trashBookings.length}</span>
-              </button>
+              <div className="schedule-head-actions">
+                <div className="batch-actions">
+                  {selectedIds.length > 0 && (
+                    <div className="batch-toolbar">
+                      <span>{selectedIds.length} выбрано</span>
+                      <button className="secondary-button" onClick={restoreSelected}>
+                        <RotateCcw size={16} /> Восстановить
+                      </button>
+                      <button className="secondary-button" onClick={deleteSelectedForever}>
+                        <Trash2 size={16} /> Удалить навсегда
+                      </button>
+                      <button className="secondary-button" onClick={clearSelection}>
+                        <X size={16} /> Очистить выбор
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
             <section className="admin-card trash-list">
               <div className="toolbar">
@@ -1029,10 +1024,6 @@ export default function AdminDashboard() {
                       <small>Сумма: {formatPrice(booking.salePrice || booking.price)} · Оплачено: {formatPrice(booking.prepayment)} · Остаток: {formatPrice(booking.balance)}</small>
                       <small>Источник: {booking.source || "Сайт"}{booking.comment ? ` · ${booking.comment}` : ""}</small>
                     </div>
-                  </div>
-                  <div className="trash-actions">
-                    <button className="secondary-button" onClick={() => void restoreFromTrash(booking.id)} type="button">Восстановить</button>
-                    <button className="danger-button" onClick={() => void deleteForever(booking.id)} type="button">Удалить навсегда</button>
                   </div>
                 </div>
               ))}
@@ -1182,8 +1173,8 @@ function BookingEditor({
           <label className="form-field">
             <span>Статус</span>
             <select value={editor.status} onChange={(event) => onChange({ ...editor, status: event.target.value as BookingRequest["status"] })}>
+              <option value="new">Новая</option>
               <option value="confirmed">Подтверждена</option>
-              {/* Removed: new, in_progress, cancelled as requested */}
             </select>
           </label>
           <label className="form-field">
@@ -1399,7 +1390,7 @@ function RepeatPlanner({
             team: booking.team,
             source: "Повтор расписания",
             sourceDetail: `${booking.date} ${booking.time}`,
-            status: "confirmed",
+            status: "new",
             comment: `Повторено из ${booking.date} ${booking.time}`,
           };
 

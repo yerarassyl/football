@@ -11,7 +11,7 @@ import {
   validateSalePrice,
   ValidationError,
 } from "@/lib/validation";
-import type { BookingRequest } from "@/lib/types";
+
 
 export async function GET(request: NextRequest) {
   if (!verifyAuthToken(request.cookies.get(AUTH_COOKIE)?.value)) {
@@ -44,13 +44,8 @@ export async function POST(request: NextRequest) {
     const listPrice = Math.round(hourlyPrice * (input.duration / 60));
     const salePrice = isAdmin && body.salePrice !== undefined ? validateSalePrice(body.salePrice) : listPrice;
 
-    // For admin-created bookings, force status to be "confirmed"
-    const initialState = isAdmin
-      ? ({
-          status: "confirmed" as BookingRequest["status"],
-          ...(body.comment !== undefined && body.comment !== null ? { comment: String(body.comment) } : {}),
-        } as { status: BookingRequest["status"]; comment?: string })
-      : validateInitialAdminState(body);
+    // Honor the status from the request body; defaults to "new" when not provided
+    const initialState = validateInitialAdminState(body);
 
     const booking = await createRequestIfAvailable({
       ...input,
