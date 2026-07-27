@@ -55,8 +55,14 @@ type QueueConfig = {
   icon: typeof CalendarDays;
 };
 
-// Removed cancelled tab as requested
 const queueTabs: QueueConfig[] = [
+  {
+    tab: "status:new",
+    status: "new",
+    label: "Новые",
+    description: "Ожидают обработки",
+    icon: Plus,
+  },
   {
     tab: "status:confirmed",
     status: "confirmed",
@@ -321,6 +327,14 @@ export default function AdminDashboard() {
     [bookings, query]
   );
 
+  const queueBookings = useMemo(() => {
+    const status = tab.startsWith("status:") ? (tab.slice(7) as QueueStatus) : null;
+    if (!status) return [];
+    return bookings
+      .filter((b) => b.status === status && matchQuery(b, query))
+      .sort(bookingSort);
+  }, [bookings, query, tab]);
+
   const currentQueue = useMemo(
     () => queueTabs.find((item) => item.tab === tab),
     [tab],
@@ -337,9 +351,9 @@ export default function AdminDashboard() {
       return;
     }
     if (!activeSelection || activeSelection.status !== currentQueue.status) {
-      setSelectedId(confirmedBookings[0]?.id || "");
+      setSelectedId(queueBookings[0]?.id || "");
     }
-  }, [bookings, createMode, currentQueue, isMobile, selectedId, confirmedBookings]);
+  }, [bookings, createMode, currentQueue, isMobile, selectedId, queueBookings]);
 
   async function persistPatch(id: string, patch: Partial<BookingRequest>) {
     const response = await fetch(`/api/bookings/${id}`, {
@@ -626,18 +640,6 @@ export default function AdminDashboard() {
           <span className="brand-mark"><Trophy size={18} /></span> Air Arena
         </Link>
         <nav>
-          <button className={tab === "schedule" ? "active" : ""} onClick={() => setTab("schedule")}>
-            <CalendarDays size={18} />
-            <span className="nav-label" data-short="День">График</span>
-          </button>
-          <button
-            className={`mobile-all-nav ${(currentQueue || tab === "trash") ? "active" : ""}`}
-            onClick={() => openMobileBookings(currentQueue?.tab || (tab === "trash" ? "trash" : "status:confirmed"))}
-            type="button"
-          >
-            <ListChecks size={18} />
-            <span className="nav-label" data-short="Все">Все заявки</span>
-          </button>
           {queueTabs.map((item) => {
             const Icon = item.icon;
             const count = bookings.filter((booking) => booking.status === item.status).length;
@@ -647,7 +649,9 @@ export default function AdminDashboard() {
                 <span
                   className="nav-label"
                   data-short={
-                    item.status === "confirmed"
+                    item.status === "new"
+                      ? "Новые"
+                      : item.status === "confirmed"
                       ? "Подтв."
                       : ""
                   }
@@ -658,19 +662,33 @@ export default function AdminDashboard() {
               </button>
             );
           })}
+          <button
+            className={`mobile-all-nav ${(currentQueue || tab === "trash") ? "active" : ""}`}
+            onClick={() => openMobileBookings(currentQueue?.tab || (tab === "trash" ? "trash" : "status:new"))}
+            type="button"
+          >
+            <ListChecks size={18} />
+            <span className="nav-label" data-short="Все">Все заявки</span>
+          </button>
+          <button className={tab === "schedule" ? "active" : ""} onClick={() => setTab("schedule")}>
+            <CalendarDays size={18} />
+            <span className="nav-label" data-short="День">График</span>
+            <span className="nav-badge">{bookings.filter(b => b.status !== "deleted").length}</span>
+          </button>
+          <button className={tab === "trash" ? "active" : ""} onClick={() => setTab("trash")}>
+            <Trash2 size={18} />
+            <span className="nav-label" data-short="Корзина">Корзина</span>
+            <span className="nav-badge">{trashBookings.length}</span>
+          </button>
           <button className={tab === "repeat" ? "active" : ""} onClick={() => setTab("repeat")}>
             <CopyPlus size={18} />
             <span className="nav-label" data-short="Повтор">Повтор</span>
-          </button>
-          <button className={`desktop-trash-nav ${tab === "trash" ? "active" : ""}`} onClick={() => setTab("trash")}>
-            <Trash2 size={18} />
-            <span className="nav-label" data-short="Корзина">Корзина</span>
           </button>
           <button className={tab === "analytics" ? "active" : ""} onClick={() => setTab("analytics")}>
             <BarChart3 size={18} />
             <span className="nav-label" data-short="Аналит.">Аналитика</span>
           </button>
-                  </nav>
+        </nav>
         <button className="logout-button" onClick={logout}><LogOut size={16} /> Выйти</button>
       </aside>
 
@@ -896,12 +914,12 @@ export default function AdminDashboard() {
                 <div className="schedule-day-head">
                   <div>
                     <strong>{currentQueue.label}</strong>
-                    <small>{confirmedBookings.length} заявок в списке</small>
+                    <small>{queueBookings.length} заявок в списке</small>
                   </div>
                 </div>
                 <div className="schedule-list">
-                  {confirmedBookings.length === 0 && <div className="empty-state">В этом статусе пока нет заявок</div>}
-                  {confirmedBookings.map((booking) => (
+                  {queueBookings.length === 0 && <div className="empty-state">В этом статусе пока нет заявок</div>}
+                  {queueBookings.map((booking) => (
                     <div className={`schedule-card-row`} key={booking.id}>
                       <label className="schedule-item-label">
                         <input
