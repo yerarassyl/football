@@ -1239,8 +1239,8 @@ a {
   min-height: 44px;
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 0 13px;
+  gap: 7px;
+  padding: 0 12px;
   color: rgba(255, 255, 255, 0.65);
   text-align: left;
   border: 0;
@@ -1272,14 +1272,15 @@ a {
 }
 
 .admin-sidebar .nav-badge {
-  min-width: 22px;
-  padding: 3px 6px;
+  min-width: 0;
+  padding: 0;
   margin-left: auto;
-  color: var(--green-dark);
-  text-align: center;
-  border-radius: 99px;
-  background: var(--lime);
-  font-size: 9px;
+  color: rgba(255, 255, 255, 0.55);
+  text-align: right;
+  border-radius: 0;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .admin-sidebar nav button.mobile-all-nav,
@@ -3046,15 +3047,14 @@ a {
     position: absolute;
     top: 6px;
     right: 6px;
-    min-width: 18px;
-    padding: 2px 5px;
+    min-width: 0;
+    padding: 0;
     margin-left: 0;
-    font-size: 8px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 9px;
     line-height: 1.1;
-  }
-
-  .admin-sidebar nav button:not(.active) .nav-badge {
-    background: rgba(209, 239, 134, 0.95);
+    border-radius: 0;
+    background: transparent;
   }
 
   .admin-sidebar nav button > span:not(.nav-label):not(.nav-badge) {
