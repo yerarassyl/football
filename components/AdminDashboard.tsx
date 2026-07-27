@@ -150,7 +150,7 @@ function defaultEditor(date: string, fieldOptions: FieldOption[]): EditorState {
     sourceDetail: "",
     salePricePerHour: String(calculateListPrice(fieldOptions, format, duration) / (duration / 60)), // per hour
     comment: "",
-    status: "new",
+    status: "confirmed",
   };
 }
 
@@ -1117,6 +1117,41 @@ function BookingEditor({
     });
   }, [booking?.id]);
 
+  // Occupied slot tracking for conflict indicators in dropdowns
+  const [occupiedByTime, setOccupiedByTime] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/availability?date=${editor.date}`, { cache: "no-store" })
+      .then((response) => response.json())
+      .then((items: Array<{ time: string; sector: string }>) => {
+        if (!active || !Array.isArray(items)) return;
+        const grouped: Record<string, string[]> = {};
+        items.forEach((item) => {
+          grouped[item.time] = Array.from(
+            new Set([...(grouped[item.time] || []), ...item.sector.split("+")]),
+          );
+        });
+        setOccupiedByTime(grouped);
+      })
+      .catch(() => setOccupiedByTime({}));
+    return () => { active = false; };
+  }, [editor.date]);
+
+  function slotIsBusy(slot: string) {
+    const referenceSector = SECTORS[editor.format]?.[0]?.id;
+    if (!referenceSector) return false;
+    const occupied = occupiedByTime[slot] || [];
+    return referenceSector.split("+").some((p) => occupied.includes(p));
+  }
+
+  const startIndex = editor.time ? TIME_SLOTS.indexOf(editor.time) : -1;
+  const nextBusy = startIndex === -1 ? null : TIME_SLOTS.slice(startIndex).findIndex((slot) => slotIsBusy(slot));
+  const maxDurationSlots = nextBusy === -1 || nextBusy === null
+    ? TIME_SLOTS.length
+    : nextBusy;
+  const availableDurations = DURATION_OPTIONS.filter((minutes) => minutes / 30 <= maxDurationSlots);
+
   if (!createMode && !booking) {
     return (
       <aside className="admin-card booking-editor empty-details">
@@ -1154,7 +1189,9 @@ function BookingEditor({
             <select value={editor.time} onChange={(event) => onChange({ ...editor, time: event.target.value })}>
               <option value="">Выберите время</option>
               {TIME_SLOTS.map((slot) => (
-                <option key={slot} value={slot}>{slot.slice(0, 5)}</option>
+                <option key={slot} value={slot} disabled={slotIsBusy(slot)}>
+                  {slot.slice(0, 5)}{slotIsBusy(slot) ? " · занято" : ""}
+                </option>
               ))}
             </select>
           </label>
@@ -1162,7 +1199,7 @@ function BookingEditor({
             <span>Количество часов</span>
             {/* Convert duration minutes to hours for display, but store as minutes */}
             <select value={editor.duration} onChange={(event) => onChange({ ...editor, duration: Number(event.target.value) })}>
-              {DURATION_OPTIONS.map((value) => (
+              {(editor.time ? availableDurations : DURATION_OPTIONS).map((value) => (
                 <option key={value} value={value}>
                   {(value / 60).toString().replace(/\.0$/, '')} час{(value / 60) === 1 ? '' : (value / 60) < 2 ? 'а' : 'ов'}
                 </option>
@@ -1632,6 +1669,12 @@ function AnalyticsDashboard({
     [byBookingDate],
   );
 
+  // All confirmed bookings regardless of date range — for debt/overdue tracking
+  const allConfirmed = useMemo(
+    () => allActive.filter((item) => item.status === "confirmed"),
+    [allActive],
+  );
+
   // Removed cancelled as per request
   // const cancelled = useMemo(
   //   () => byCreatedDate.filter((item) => item.status === "cancelled"),
@@ -1644,7 +1687,7 @@ function AnalyticsDashboard({
   const utilizationRate = totalCapacityHours > 0 ? (fieldHours / totalCapacityHours) * 100 : 0;
   const revenue = confirmed.reduce((sum, item) => sum + (Number(item.salePrice || item.price) || 0), 0);
   const paid = confirmed.reduce((sum, item) => sum + (Number(item.prepayment) || 0), 0);
-  const debt = confirmed.reduce((sum, item) => sum + (Number(item.balance) || 0), 0);
+  const debt = allConfirmed.reduce((sum, item) => sum + (Number(item.balance) || 0), 0);
   const averageConfirmed = (list: BookingRequest[]) => {
     if (list.length === 0) return 0;
     const total = list.reduce((sum, item) => sum + (Number(item.salePrice || item.price) || 0), 0);
@@ -1682,6 +1725,27 @@ function AnalyticsDashboard({
     current.debt += Number(item.balance) || 0;
     current.lastDate = current.lastDate > item.date ? current.lastDate : item.date;
     current.sources.add(item.source || "Сайт");
+    map.set(key, current);
+    return map;
+  }, new Map()).values());
+
+  // All-time client aggregation for debt tracking (not limited to date range)
+  const allClients = Array.from(allActive.reduce<Map<string, {
+    phone: string;
+    name: string;
+    bookings: number;
+    debt: number;
+  }>>((map, item) => {
+    if (item.status !== "confirmed") return map;
+    const key = normalizePhone(item.phone) || item.id;
+    const current = map.get(key) || {
+      phone: item.phone,
+      name: item.name,
+      bookings: 0,
+      debt: 0,
+    };
+    current.bookings += 1;
+    current.debt += Number(item.balance) || 0;
     map.set(key, current);
     return map;
   }, new Map()).values());
@@ -1773,7 +1837,7 @@ function AnalyticsDashboard({
       .filter((value): value is number => value != null),
   );
 
-  const overdueRows: AnalyticsRow[] = confirmed
+  const overdueRows: AnalyticsRow[] = allConfirmed
     .filter((item) => item.balance > 0 && item.date < today)
     .sort((a, b) => b.balance - a.balance)
     .slice(0, 8)
@@ -1985,7 +2049,7 @@ function AnalyticsDashboard({
             <AnalyticsListCard title="Топ клиенты по выручке" rows={topClients} />
             <AnalyticsListCard
               title="Клиенты с долгами"
-              rows={clients.filter((client) => client.debt > 0).sort((a, b) => b.debt - a.debt).slice(0, 8).map((client) => ({
+              rows={Array.from(allClients).filter((client) => client.debt > 0).sort((a, b) => b.debt - a.debt).slice(0, 8).map((client) => ({
                 label: client.name,
                 value: formatPrice(client.debt),
                 meta: `${client.bookings} броней · ${client.phone}`,
