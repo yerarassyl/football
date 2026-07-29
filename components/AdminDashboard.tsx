@@ -1663,7 +1663,7 @@ function BookingEditor({
               <div className="payment-history-row" key={payment.id}>
                 <strong>{formatPrice(payment.amount)}</strong>
                 <span>{payment.date || "Без даты"}</span>
-                <span>{payment.method}</span>
+                <span>{payment.method && payment.method !== "Не выбран" ? payment.method : ""}</span>
                 <span>{payment.recipient}</span>
                 <button className="payment-delete-btn" title="Удалить оплату" type="button" disabled={saving} onClick={() => void onDeletePayment(payment.id)}><Trash2 size={14} /></button>
               </div>
