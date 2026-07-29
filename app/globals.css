@@ -2503,6 +2503,13 @@ a {
   font-weight: 700;
 }
 
+.card-price {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .schedule-card-format {
   margin-top: 8px;
   font-size: 19px;
@@ -2822,6 +2829,35 @@ a {
   border-radius: 12px;
   text-align: center;
   font-size: 11px;
+}
+
+/* Price settings tab */
+.prices-tab-content {
+  max-width: 520px;
+}
+
+.prices-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+}
+
+.prices-grid .form-field span {
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  display: block;
+}
+
+.prices-grid .form-field input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 620px) {
+  .prices-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Price settings modal */
@@ -3436,6 +3472,12 @@ a {
     margin-bottom: 30px;
   }
 
+  .mobile-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .admin-heading {
     align-items: flex-start;
     flex-direction: column;
@@ -3672,6 +3714,10 @@ a {
 
   .card-finance-trio em {
     font-size: 8px;
+  }
+
+  .card-price {
+    font-size: 12px;
   }
 
   .inline-payment-grid {

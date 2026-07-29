@@ -29,7 +29,7 @@ import CalendarPicker from "./CalendarPicker";
 
 type QueueStatus = Exclude<RequestStatus, "deleted">;
 type QueueTab = `status:${QueueStatus}`;
-type Tab = "schedule" | QueueTab | "repeat" | "trash" | "analytics";
+type Tab = "schedule" | QueueTab | "repeat" | "trash" | "analytics" | "prices";
 
 type EditorState = {
   id?: string;
@@ -272,6 +272,17 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     clearSelection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab === "prices") {
+      setPriceForm({
+        quarter: fieldOptions.find((f) => f.id === "quarter")?.price || 10000,
+        half: fieldOptions.find((f) => f.id === "half")?.price || 18000,
+        full: fieldOptions.find((f) => f.id === "full")?.price || 30000,
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -734,10 +745,13 @@ export default function AdminDashboard() {
             <BarChart3 size={18} />
             <span className="nav-label" data-short="Аналит.">Аналитика</span>
           </button>
+          <button className={tab === "prices" ? "active" : ""} onClick={() => setTab("prices")}>
+            <CircleDollarSign size={18} />
+            <span className="nav-label" data-short="Прайс">Прайс</span>
+          </button>
         </nav>
         <div className="sidebar-footer">
           <button className="logout-button" onClick={logout}><LogOut size={16} /> Выйти</button>
-          <button className="coin-button" onClick={openPriceSettings} title="Настройки прайса"><CircleDollarSign size={16} /></button>
         </div>
       </aside>
 
@@ -745,8 +759,10 @@ export default function AdminDashboard() {
         {notice && <div role="status" aria-live="polite" className={`admin-toast ${notice.type}`}>{notice.text}</div>}
         <div className="admin-mobile-head">
           <span className="brand"><span className="brand-mark"><Trophy size={16} /></span> Air Arena</span>
-          <button aria-label="Настройки прайса" className="secondary-button" onClick={openPriceSettings}><CircleDollarSign size={15} /></button>
-          <button aria-label="Выйти из админки" className="secondary-button" onClick={logout}><LogOut size={15} /></button>
+          <div className="mobile-head-actions">
+            <button aria-label="Настройки прайса" className="secondary-button" onClick={() => { setCreateMode(false); setSelectedId(""); setTab("prices"); }}><CircleDollarSign size={15} /></button>
+            <button aria-label="Выйти из админки" className="secondary-button" onClick={logout}><LogOut size={15} /></button>
+          </div>
         </div>
 
         {tab === "schedule" && (
@@ -984,17 +1000,21 @@ export default function AdminDashboard() {
                         <div className="schedule-card-body">
                           <div className="schedule-card-top">
                             <strong>{booking.name}</strong>
-                            <span className="card-finance-trio">
-                              <span><em>Сумма</em>{formatPrice(booking.salePrice || booking.price)}</span>
-                              <span><em>Оплачено</em>{formatPrice(booking.prepayment)}</span>
-                              <span><em>Остаток</em>{formatPrice(booking.balance)}</span>
-                            </span>
+                            {tab === "status:new" ? (
+                              <span className="card-price">{formatPrice(booking.salePrice || booking.price)}</span>
+                            ) : (
+                              <span className="card-finance-trio">
+                                <span><em>Сумма</em>{formatPrice(booking.salePrice || booking.price)}</span>
+                                <span><em>Оплачено</em>{formatPrice(booking.prepayment)}</span>
+                                <span><em>Остаток</em>{formatPrice(booking.balance)}</span>
+                              </span>
+                            )}
                           </div>
                           <div className="schedule-card-format">{formatLabel(booking.format)}</div>
                           <div className="schedule-card-meta">
                             <span>{booking.sector}</span>
                             <span>{booking.team || booking.phone}</span>
-                            <span>{booking.paymentStatus === "paid" ? "Оплачено" : booking.paymentStatus === "deposit" ? "Частично" : "Без оплаты"}</span>
+                            {tab !== "status:new" && <span>{booking.paymentStatus === "paid" ? "Оплачено" : booking.paymentStatus === "deposit" ? "Частично" : "Без оплаты"}</span>}
                           </div>
                           {booking.comment && <div className="schedule-card-comment">{booking.comment}</div>}
                         </div>
@@ -1095,6 +1115,51 @@ export default function AdminDashboard() {
             onOpenFilter={openFilteredBookings}
             onOpenDate={openScheduleDate}
           />
+        )}
+        {tab === "prices" && (
+          <>
+            <div className="admin-heading">
+              <div>
+                <div className="section-kicker">Настройки</div>
+                <h1>Прайс</h1>
+                <p>Базовые цены для каждого формата поля.</p>
+              </div>
+              <button className="primary-button" disabled={saving} onClick={savePriceSettings} type="button">
+                <Save size={16} /> Сохранить прайс
+              </button>
+            </div>
+            <section className="admin-card prices-tab-content">
+              <div className="form-grid prices-grid">
+                <label className="form-field">
+                  <span>Четверть поля (1/4)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={priceForm.quarter}
+                    onChange={(e) => setPriceForm({ ...priceForm, quarter: Number(e.target.value) || 0 })}
+                  />
+                </label>
+                <label className="form-field">
+                  <span>Половина поля (1/2)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={priceForm.half}
+                    onChange={(e) => setPriceForm({ ...priceForm, half: Number(e.target.value) || 0 })}
+                  />
+                </label>
+                <label className="form-field">
+                  <span>Полное поле</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={priceForm.full}
+                    onChange={(e) => setPriceForm({ ...priceForm, full: Number(e.target.value) || 0 })}
+                  />
+                </label>
+              </div>
+            </section>
+          </>
         )}
         {showPriceSettings && (
           <div className="modal-overlay" onClick={() => setShowPriceSettings(false)}>
