@@ -9,10 +9,12 @@ import {
   CopyPlus,
   Download,
   LogOut,
+  Pencil,
   Plus,
   RotateCcw,
   Save,
   Search,
+  Settings,
   Trash2,
   Trophy,
   X,
@@ -71,23 +73,11 @@ const queueTabs: QueueConfig[] = [
   },
 ];
 
-const paymentMethods = [
-  "Не выбран",
-  "Наличные",
-  "Kaspi QR",
-  "Kaspi Терминал",
-  "Счет на оплату",
-  "Банковский перевод",
-  "Контрактный клиент",
-  "Другое",
-];
-
 const paymentRecipients = [
   "Не выбран",
   "ТОО AIR ARENA",
   "ИП AIR ARENA",
-  "ТОО WMA GROUP",
-  "Другое",
+  "Наличные",
 ];
 
 function addDays(date: string, days: number) {
@@ -202,6 +192,43 @@ export default function AdminDashboard() {
   const [isMobile, setIsMobile] = useState(false);
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [fieldOptions, setFieldOptions] = useState<FieldOption[]>(FIELD_OPTIONS);
+  const [showPriceSettings, setShowPriceSettings] = useState(false);
+  const [priceForm, setPriceForm] = useState({ quarter: 0, half: 0, full: 0 });
+  const [priceFormOpen, setPriceFormOpen] = useState(false);
+
+  function openPriceSettings() {
+    setPriceForm({
+      quarter: fieldOptions.find((f) => f.id === "quarter")?.price || 10000,
+      half: fieldOptions.find((f) => f.id === "half")?.price || 18000,
+      full: fieldOptions.find((f) => f.id === "full")?.price || 30000,
+    });
+    setShowPriceSettings(true);
+  }
+
+  async function savePriceSettings() {
+    setSaving(true);
+    try {
+      const response = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prices: priceForm }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Не удалось сохранить цены");
+      setFieldOptions((items) =>
+        items.map((item) => ({
+          ...item,
+          price: result.prices?.[item.id] ?? item.price,
+        })),
+      );
+      showNotice("success", "Прайс обновлен");
+      setShowPriceSettings(false);
+    } catch (error) {
+      showNotice("error", noticeText(error));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   function showNotice(type: "success" | "error", text: string) {
     setNotice({ type, text });
@@ -407,9 +434,9 @@ export default function AdminDashboard() {
         await persistPatch(editor.id, {
           ...payload,
           comment: editor.comment,
-          status: editor.status,
+          status: "confirmed",
         });
-        showNotice("success", "Бронь обновлена");
+        showNotice("success", "Бронь подтверждена");
       } else {
         const createResponse = await fetch("/api/bookings", {
           method: "POST",
@@ -708,13 +735,17 @@ export default function AdminDashboard() {
             <span className="nav-label" data-short="Аналит.">Аналитика</span>
           </button>
         </nav>
-        <button className="logout-button" onClick={logout}><LogOut size={16} /> Выйти</button>
+        <div className="sidebar-footer">
+          <button className="logout-button" onClick={logout}><LogOut size={16} /> Выйти</button>
+          <button className="coin-button" onClick={openPriceSettings} title="Настройки прайса"><CircleDollarSign size={16} /></button>
+        </div>
       </aside>
 
       <main className="admin-main">
         {notice && <div role="status" aria-live="polite" className={`admin-toast ${notice.type}`}>{notice.text}</div>}
         <div className="admin-mobile-head">
           <span className="brand"><span className="brand-mark"><Trophy size={16} /></span> Air Arena</span>
+          <button aria-label="Настройки прайса" className="secondary-button" onClick={openPriceSettings}><CircleDollarSign size={15} /></button>
           <button aria-label="Выйти из админки" className="secondary-button" onClick={logout}><LogOut size={15} /></button>
         </div>
 
@@ -806,7 +837,11 @@ export default function AdminDashboard() {
                         <div className="schedule-card-body">
                           <div className="schedule-card-top">
                             <strong>{booking.name}</strong>
-                            <span>{formatPrice(booking.salePrice || booking.price)}</span>
+                            <span className="card-finance-trio">
+                              <span>{formatPrice(booking.salePrice || booking.price)}</span>
+                              <span>{formatPrice(booking.prepayment)}</span>
+                              <span>{formatPrice(booking.balance)}</span>
+                            </span>
                           </div>
                           <div className="schedule-card-format">{formatLabel(booking.format)}</div>
                           <div className="schedule-card-meta">
@@ -949,7 +984,11 @@ export default function AdminDashboard() {
                         <div className="schedule-card-body">
                           <div className="schedule-card-top">
                             <strong>{booking.name}</strong>
-                            <span>{formatPrice(booking.salePrice || booking.price)}</span>
+                            <span className="card-finance-trio">
+                              <span>{formatPrice(booking.salePrice || booking.price)}</span>
+                              <span>{formatPrice(booking.prepayment)}</span>
+                              <span>{formatPrice(booking.balance)}</span>
+                            </span>
                           </div>
                           <div className="schedule-card-format">{formatLabel(booking.format)}</div>
                           <div className="schedule-card-meta">
@@ -1057,6 +1096,51 @@ export default function AdminDashboard() {
             onOpenDate={openScheduleDate}
           />
         )}
+        {showPriceSettings && (
+          <div className="modal-overlay" onClick={() => setShowPriceSettings(false)}>
+            <div className="modal-content price-settings-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-head">
+                <h2><Settings size={18} /> Настройки прайса</h2>
+                <button className="modal-close" onClick={() => setShowPriceSettings(false)} type="button"><X size={18} /></button>
+              </div>
+              <div className="modal-body">
+                <label className="form-field">
+                  <span>Четверть поля (1/4)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={priceForm.quarter}
+                    onChange={(e) => setPriceForm({ ...priceForm, quarter: Number(e.target.value) || 0 })}
+                  />
+                </label>
+                <label className="form-field">
+                  <span>Половина поля (1/2)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={priceForm.half}
+                    onChange={(e) => setPriceForm({ ...priceForm, half: Number(e.target.value) || 0 })}
+                  />
+                </label>
+                <label className="form-field">
+                  <span>Полное поле</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={priceForm.full}
+                    onChange={(e) => setPriceForm({ ...priceForm, full: Number(e.target.value) || 0 })}
+                  />
+                </label>
+              </div>
+              <div className="modal-actions">
+                <button className="secondary-button" onClick={() => setShowPriceSettings(false)} type="button">Отмена</button>
+                <button className="primary-button" disabled={saving} onClick={savePriceSettings} type="button">
+                  <Save size={16} /> Сохранить прайс
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
               </main>
     </div>
   );
@@ -1102,20 +1186,22 @@ function BookingEditor({
   const paymentTotal = booking?.prepayment || 0;
   const balance = Math.max(0, (Number(editor.salePricePerHour) || 0) * (editor.duration / 60) - paymentTotal);
   const sectorOptions = SECTORS[editor.format];
-  const [paymentForm, setPaymentForm] = useState({
+  const [editingPrice, setEditingPrice] = useState(false);
+  const [showInlinePayment, setShowInlinePayment] = useState(false);
+  const [inlinePaymentForm, setInlinePaymentForm] = useState({
     amount: "",
     date: arenaDateValue(),
-    method: "Не выбран",
     recipient: "Не выбран",
   });
 
   useEffect(() => {
-    setPaymentForm({
+    setInlinePaymentForm({
       amount: "",
       date: arenaDateValue(),
-      method: "Не выбран",
       recipient: "Не выбран",
     });
+    setEditingPrice(false);
+    setShowInlinePayment(false);
   }, [booking?.id]);
 
   // Occupied slot tracking for conflict indicators in dropdowns
@@ -1249,18 +1335,6 @@ function BookingEditor({
             <span>Источник</span>
             <input value={editor.source} onChange={(event) => onChange({ ...editor, source: event.target.value })} />
           </label>
-          <label className="form-field">
-            <span>Деталь источника</span>
-            <input value={editor.sourceDetail} onChange={(event) => onChange({ ...editor, sourceDetail: event.target.value })} />
-          </label>
-          <label className="form-field">
-            <span>Стоимость по прайсу</span>
-            <input disabled value={formatPrice(listPrice)} />
-          </label>
-          <label className="form-field">
-            <span>Фактическая стоимость за час</span>
-            <input type="number" min="0" value={editor.salePricePerHour} onChange={(event) => onChange({ ...editor, salePricePerHour: event.target.value })} />
-          </label>
           <label className="form-field editor-span-2">
             <span>Комментарий</span>
             <textarea rows={4} value={editor.comment} onChange={(event) => onChange({ ...editor, comment: event.target.value })} />
@@ -1269,22 +1343,90 @@ function BookingEditor({
 
         <div className="editor-totals">
           <div><span>Стоимость по прайсу</span><strong>{formatPrice(listPrice)}</strong></div>
-          <div><span>Фактическая стоимость за час</span><strong>{formatPrice(Number(editor.salePricePerHour) || 0)}</strong></div>
+          <div className="totals-editable">
+            <span>Фактическая стоимость за час</span>
+            {editingPrice ? (
+              <div className="totals-edit-row">
+                <input
+                  type="number"
+                  min="0"
+                  className="totals-inline-input"
+                  value={editor.salePricePerHour}
+                  onChange={(e) => onChange({ ...editor, salePricePerHour: e.target.value })}
+                  autoFocus
+                  onBlur={() => setEditingPrice(false)}
+                  onKeyDown={(e) => { if (e.key === "Enter") setEditingPrice(false); }}
+                />
+              </div>
+            ) : (
+              <div className="totals-value-row">
+                <strong>{formatPrice(Number(editor.salePricePerHour) || 0)}</strong>
+                <button className="icon-edit-btn" onClick={() => setEditingPrice(true)} type="button" title="Изменить цену"><Pencil size={14} /></button>
+              </div>
+            )}
+          </div>
           <div><span>Итого к оплате</span><strong>{formatPrice(Math.max(0, (Number(editor.salePricePerHour) || 0) * (editor.duration / 60)))}</strong></div>
-          <div><span>Оплачено</span><strong>{formatPrice(paymentTotal)}</strong></div>
+          <div className="totals-editable">
+            <span>Оплачено</span>
+            <div className="totals-value-row">
+              <strong>{formatPrice(paymentTotal)}</strong>
+              {!createMode && booking && (
+                <button className="icon-edit-btn icon-plus-btn" onClick={() => setShowInlinePayment(!showInlinePayment)} type="button" title="Добавить оплату"><Plus size={14} /></button>
+              )}
+            </div>
+          </div>
           <div><span>Остаток</span><strong>{formatPrice(balance)}</strong></div>
         </div>
+
+        {showInlinePayment && !createMode && booking && (
+          <form
+            className="inline-payment-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const amount = Number(inlinePaymentForm.amount);
+              if (!Number.isFinite(amount) || amount <= 0) return;
+              void onAddPayment({
+                amount,
+                date: inlinePaymentForm.date,
+                method: "",
+                recipient: inlinePaymentForm.recipient,
+              });
+              setInlinePaymentForm({ amount: "", date: arenaDateValue(), recipient: "Не выбран" });
+              setShowInlinePayment(false);
+            }}
+          >
+            <div className="inline-payment-grid">
+              <label className="form-field">
+                <span>Сумма</span>
+                <input type="number" min="1" required value={inlinePaymentForm.amount} onChange={(e) => setInlinePaymentForm({ ...inlinePaymentForm, amount: e.target.value })} />
+              </label>
+              <label className="form-field">
+                <span>Дата</span>
+                <input type="date" required value={inlinePaymentForm.date} onChange={(e) => setInlinePaymentForm({ ...inlinePaymentForm, date: e.target.value })} />
+              </label>
+              <label className="form-field">
+                <span>Получатель</span>
+                <select value={inlinePaymentForm.recipient} onChange={(e) => setInlinePaymentForm({ ...inlinePaymentForm, recipient: e.target.value })}>
+                  {paymentRecipients.map((r) => <option key={r}>{r}</option>)}
+                </select>
+              </label>
+              <div className="inline-payment-submit">
+                <button className="secondary-button" disabled={saving} type="submit"><CircleDollarSign size={16} /> Добавить оплату</button>
+              </div>
+            </div>
+          </form>
+        )}
 
         <div className="editor-actions">
           {createMode ? (
             <>
               <button className="secondary-button" onClick={onCancelCreate} type="button">Отмена</button>
-              <button className="primary-button" disabled={saving} type="submit"><Save size={16} /> Сохранить</button>
+              <button className="primary-button" disabled={saving} type="submit"><Check size={16} /> Подтвердить</button>
             </>
           ) : (
             <>
               <button className="danger-button" onClick={onDelete} type="button"><Trash2 size={16} /> В корзину</button>
-              <button className="primary-button" disabled={saving} type="submit"><Save size={16} /> Сохранить</button>
+              <button className="primary-button" disabled={saving} type="submit"><Check size={16} /> Подтвердить</button>
             </>
           )}
         </div>
@@ -1308,46 +1450,6 @@ function BookingEditor({
               </div>
             ))}
           </div>
-          <form
-            className="payment-add-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const amount = Number(paymentForm.amount);
-              if (!Number.isFinite(amount) || amount <= 0) return;
-              void onAddPayment({
-                amount,
-                date: paymentForm.date,
-                method: paymentForm.method,
-                recipient: paymentForm.recipient,
-              });
-            }}
-          >
-            <div className="editor-grid payment-form-grid">
-              <label className="form-field">
-                <span>Сумма</span>
-                <input type="number" min="1" required value={paymentForm.amount} onChange={(event) => setPaymentForm({ ...paymentForm, amount: event.target.value })} />
-              </label>
-              <label className="form-field">
-                <span>Дата</span>
-                <input type="date" required value={paymentForm.date} onChange={(event) => setPaymentForm({ ...paymentForm, date: event.target.value })} />
-              </label>
-              <label className="form-field">
-                <span>Способ оплаты</span>
-                <select value={paymentForm.method} onChange={(event) => setPaymentForm({ ...paymentForm, method: event.target.value })}>
-                  {paymentMethods.map((method) => <option key={method}>{method}</option>)}
-                </select>
-              </label>
-              <label className="form-field">
-                <span>Получатель</span>
-                <select value={paymentForm.recipient} onChange={(event) => setPaymentForm({ ...paymentForm, recipient: event.target.value })}>
-                  {paymentRecipients.map((recipient) => <option key={recipient}>{recipient}</option>)}
-                </select>
-              </label>
-              <div className="payment-form-submit">
-                <button className="secondary-button" disabled={saving} type="submit"><CircleDollarSign size={16} /> Добавить оплату</button>
-              </div>
-            </div>
-          </form>
         </section>
       )}
     </aside>

@@ -1256,6 +1256,37 @@ a {
   font-weight: 750;
 }
 
+.sidebar-footer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-footer .logout-button {
+  flex: 1;
+}
+
+.coin-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.coin-button:hover {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.3);
+  background: rgba(251, 191, 36, 0.08);
+}
+
 .admin-sidebar nav button.active {
   color: var(--white);
   background: rgba(255, 255, 255, 0.1);
@@ -2430,6 +2461,35 @@ a {
   white-space: nowrap;
 }
 
+.card-finance-trio {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+
+.card-finance-trio span {
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.card-finance-trio span:first-child {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.card-finance-trio span:nth-child(2) {
+  color: var(--green);
+  font-size: 11px;
+}
+
+.card-finance-trio span:nth-child(3) {
+  color: var(--red);
+  font-size: 11px;
+}
+
 .schedule-card-format {
   margin-top: 8px;
   font-size: 19px;
@@ -2539,6 +2599,69 @@ a {
   font-size: 16px;
 }
 
+.totals-editable {
+  position: relative;
+}
+
+.totals-value-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.totals-value-row strong {
+  margin-top: 0;
+}
+
+.totals-edit-row {
+  margin-top: 6px;
+}
+
+.totals-inline-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--green);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  background: #fff;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.totals-inline-input:focus {
+  box-shadow: 0 0 0 3px rgba(34, 139, 34, 0.1);
+}
+
+.icon-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--ink-light);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.icon-edit-btn:hover {
+  color: var(--green);
+  border-color: #c1dcc6;
+  background: #f6fbf7;
+}
+
+.icon-plus-btn:hover {
+  color: #fff;
+  background: var(--green);
+  border-color: var(--green);
+}
+
 .editor-actions {
   display: flex;
   gap: 10px;
@@ -2627,6 +2750,58 @@ a {
   min-height: 46px;
 }
 
+/* Inline payment form inside editor totals */
+.inline-payment-form {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--green);
+  border-radius: 12px;
+  background: #f6fbf7;
+}
+
+.inline-payment-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+
+.inline-payment-grid .form-field {
+  margin: 0;
+}
+
+.inline-payment-grid .form-field input,
+.inline-payment-grid .form-field select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 12px;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.inline-payment-submit {
+  display: flex;
+  align-items: flex-end;
+}
+
+.inline-payment-submit button {
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--green);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.inline-payment-submit button:hover {
+  filter: brightness(0.95);
+}
+
 .empty-inline {
   padding: 14px;
   color: var(--muted);
@@ -2634,6 +2809,101 @@ a {
   border-radius: 12px;
   text-align: center;
   font-size: 11px;
+}
+
+/* Price settings modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  padding: 20px;
+}
+
+.modal-content {
+  width: 100%;
+  max-width: 420px;
+  background: #fff;
+  border-radius: 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 0;
+}
+
+.modal-head h3 {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink-light);
+  cursor: pointer;
+}
+
+.modal-close:hover {
+  color: var(--ink);
+  background: #f5f5f5;
+}
+
+.modal-body {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-body .form-field {
+  margin: 0;
+}
+
+.modal-body .form-field label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.modal-body .form-field input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  background: #fafcfa;
+  box-sizing: border-box;
+}
+
+.modal-body .form-field input:focus {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(34, 139, 34, 0.08);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  padding: 0 24px 24px;
 }
 
 .trash-row,
@@ -3367,6 +3637,53 @@ a {
 
   .editor-head h2 {
     font-size: 20px;
+  }
+
+  /* Fix date inputs overflowing on mobile */
+  .editor-grid .form-field input[type="date"] {
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 14px;
+    padding: 10px 12px;
+  }
+
+  .card-finance-trio span {
+    font-size: 10px;
+  }
+
+  .card-finance-trio span:first-child {
+    font-size: 11px;
+  }
+
+  .inline-payment-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-overlay {
+    padding: 12px;
+  }
+
+  .modal-content {
+    max-width: 100%;
+    border-radius: 16px;
+  }
+
+  .modal-head {
+    padding: 16px 18px 0;
+  }
+
+  .modal-body {
+    padding: 14px 18px;
+  }
+
+  .modal-actions {
+    padding: 0 18px 18px;
+    flex-direction: column;
+  }
+
+  .sidebar-footer {
+    display: none;
   }
 
   .editor-form,
