@@ -138,7 +138,7 @@ function validatePayments(value: unknown): PaymentRecord[] {
       id: cleanString(payment.id || `PAY-${index + 1}`, "ID оплаты", 100, true),
       amount: validPositiveMoney(payment.amount, "Сумма оплаты"),
       date: validDate(payment.date, "Дата оплаты"),
-      method: cleanString(payment.method, "Способ оплаты", 80, true),
+      method: cleanString(payment.method || "", "Способ оплаты", 80),
       recipient: cleanString(payment.recipient, "Получатель", 100, true),
     };
   });
@@ -164,6 +164,11 @@ export function validateBookingPatch(body: Record<string, unknown>): Partial<Boo
   if (body.deletedAt !== undefined) patch.deletedAt = cleanString(body.deletedAt, "Дата удаления", 40);
   if (body.listPrice !== undefined) patch.listPrice = validPositiveMoney(body.listPrice, "Стоимость по прайсу");
   if (body.salePrice !== undefined) patch.salePrice = validPositiveMoney(body.salePrice, "Фактическая стоимость");
+  if (body.oldPrice !== undefined) {
+    const v = Number(body.oldPrice);
+    if (!Number.isFinite(v) || v < 0 || v > MAX_PRICE) throw new ValidationError("Старая цена указана неверно");
+    patch.oldPrice = Math.round(v);
+  }
   if (body.price !== undefined) patch.price = validPositiveMoney(body.price, "Стоимость");
   if (body.payments !== undefined) patch.payments = validatePayments(body.payments);
   if (Object.keys(patch).length === 0) throw new ValidationError("Нет данных для обновления");

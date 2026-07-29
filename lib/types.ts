@@ -24,6 +24,7 @@ export type BookingRequest = {
   price: number;
   listPrice: number;
   salePrice: number;
+  oldPrice: number;
   name: string;
   phone: string;
   team: string;
@@ -58,4 +59,5 @@ export type BookingInput = Omit<
   | "comment"
   | "deletedAt"
   | "payments"
+  | "oldPrice"
 >;

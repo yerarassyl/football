@@ -5,9 +5,9 @@ const ACTIVE_STATUSES: RequestStatus[] = ["in_progress", "confirmed"];
 const QUARTERS = ["A", "B", "C", "D"] as const;
 
 export function formatLabel(format: FieldFormat) {
-  if (format === "quarter") return "1/4 поля";
-  if (format === "half") return "1/2 поля";
-  return "Поле целиком";
+  if (format === "quarter") return "5×5";
+  if (format === "half") return "8×8";
+  return "11×11";
 }
 
 export function normalizeSectorParts(sector: string) {
@@ -56,8 +56,8 @@ export function normalizePayments(
         id: String(item.id || `PAY-${index + 1}-${Date.now()}`),
         amount,
         date: String(item.date || fallbackDate || "").slice(0, 10),
-        method: String(item.method || fallbackMethod || "Не выбран"),
-        recipient: String(item.recipient || fallbackRecipient || "Не выбран"),
+        method: String(item.method || fallbackMethod || ""),
+        recipient: String(item.recipient || fallbackRecipient || ""),
       };
     })
     .filter((payment): payment is PaymentRecord => Boolean(payment));
@@ -75,6 +75,7 @@ export function normalizePayments(
 }
 
 export function enrichBooking(request: BookingRequest): BookingRequest {
+  const oldPrice = Number(request.oldPrice) || 0;
   const listPrice = Number(request.listPrice || request.price) || 0;
   const salePrice = Number(request.salePrice || request.price || listPrice) || 0;
   const payments = normalizePayments(
@@ -93,6 +94,7 @@ export function enrichBooking(request: BookingRequest): BookingRequest {
     price: salePrice,
     listPrice,
     salePrice,
+    oldPrice,
     updatedAt: request.updatedAt || request.createdAt || "",
     confirmedAt: request.confirmedAt || "",
     cancelledAt: request.cancelledAt || "",
@@ -100,8 +102,8 @@ export function enrichBooking(request: BookingRequest): BookingRequest {
     prepayment,
     balance,
     paymentStatus: paymentStatusFor(salePrice, prepayment),
-    paymentMethod: latestPayment?.method || request.paymentMethod || "Не выбран",
-    paymentRecipient: latestPayment?.recipient || request.paymentRecipient || "Не выбран",
+    paymentMethod: latestPayment?.method || request.paymentMethod || "",
+    paymentRecipient: latestPayment?.recipient || request.paymentRecipient || "",
     paidAt: latestPayment?.date || request.paidAt || "",
     comment: request.comment || "",
     deletedAt: request.deletedAt || "",

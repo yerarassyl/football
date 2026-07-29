@@ -26,10 +26,11 @@ import { FIELD_OPTIONS, FieldOption, formatPrice, SECTORS, DURATION_OPTIONS, TIM
 import { arenaDateValue, bookingEndTime, formatDuration } from "@/lib/time";
 import { BookingRequest, FieldFormat, PaymentRecord, RequestStatus } from "@/lib/types";
 import CalendarPicker from "./CalendarPicker";
+import SerialPlanner from "./SerialPlanner";
 
 type QueueStatus = Exclude<RequestStatus, "deleted">;
 type QueueTab = `status:${QueueStatus}`;
-type Tab = "schedule" | QueueTab | "repeat" | "trash" | "analytics" | "prices";
+type Tab = "schedule" | QueueTab | "repeat" | "serial" | "trash" | "analytics" | "prices";
 
 type EditorState = {
   id?: string;
@@ -44,6 +45,7 @@ type EditorState = {
   source: string;
   sourceDetail: string;
   salePricePerHour: string; // changed to per hour
+  oldPricePerHour: string; // old price per hour for promotional display
   comment: string;
   status: BookingRequest["status"];
 };
@@ -74,7 +76,6 @@ const queueTabs: QueueConfig[] = [
 ];
 
 const paymentRecipients = [
-  "Не выбран",
   "ТОО AIR ARENA",
   "ИП AIR ARENA",
   "Наличные",
@@ -140,6 +141,7 @@ function defaultEditor(date: string, fieldOptions: FieldOption[]): EditorState {
     source: "Администратор",
     sourceDetail: "",
     salePricePerHour: String(calculateListPrice(fieldOptions, format, duration) / (duration / 60)), // per hour
+    oldPricePerHour: "",
     comment: "",
     status: "confirmed",
   };
@@ -163,6 +165,7 @@ function editorFromBooking(booking: BookingRequest): EditorState {
     source: booking.source,
     sourceDetail: booking.sourceDetail,
     salePricePerHour: String(perHour),
+    oldPricePerHour: booking.oldPrice > 0 ? String(booking.oldPrice / hours) : "",
     comment: booking.comment || "",
     status: booking.status,
   };
@@ -424,6 +427,9 @@ export default function AdminDashboard() {
       const durationHours = editor.duration / 60;
       const totalPrice = Math.round(salePricePerHour * durationHours);
 
+      const oldPricePerHour = Number(editor.oldPricePerHour) || 0;
+      const totalOldPrice = oldPricePerHour > 0 ? Math.round(oldPricePerHour * durationHours) : 0;
+
       const payload = {
         date: editor.date,
         time: editor.time,
@@ -434,6 +440,7 @@ export default function AdminDashboard() {
         listPrice,
         price: totalPrice, // total price
         salePrice: totalPrice, // keep same as price for compatibility
+        oldPrice: totalOldPrice,
         name: editor.name,
         phone: editor.phone,
         team: editor.team,
@@ -567,7 +574,13 @@ export default function AdminDashboard() {
       );
 
       await Promise.all(updates);
-      await load(); // refresh data
+      setBookings((current) =>
+        current.map((item) =>
+          selectedIds.includes(item.id)
+            ? { ...item, status: "confirmed" as const }
+            : item
+        )
+      );
       showNotice("success", `Подтверждено ${selectedIds.length} броней`);
       clearSelection();
     } catch (error) {
@@ -580,19 +593,26 @@ export default function AdminDashboard() {
     if (!window.confirm(`Переместить ${selectedIds.length} выбранных броней в корзину?`)) return;
 
     try {
+      const deletedAt = new Date().toISOString();
       const updates = selectedIds.map(id =>
         fetch(`/api/bookings/${id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             status: "deleted",
-            deletedAt: new Date().toISOString()
+            deletedAt
           })
         })
       );
 
       await Promise.all(updates);
-      await load(); // refresh data
+      setBookings((current) =>
+        current.map((item) =>
+          selectedIds.includes(item.id)
+            ? { ...item, status: "deleted" as const, deletedAt }
+            : item
+        )
+      );
       showNotice("success", `Перемещено в корзину ${selectedIds.length} броней`);
       clearSelection();
     } catch (error) {
@@ -617,7 +637,13 @@ export default function AdminDashboard() {
       );
 
       await Promise.all(updates);
-      await load(); // refresh data
+      setBookings((current) =>
+        current.map((item) =>
+          selectedIds.includes(item.id)
+            ? { ...item, status: "confirmed" as const, deletedAt: "" }
+            : item
+        )
+      );
       showNotice("success", `Восстановлено ${selectedIds.length} броней`);
       clearSelection();
     } catch (error) {
@@ -740,6 +766,10 @@ export default function AdminDashboard() {
           <button className={tab === "repeat" ? "active" : ""} onClick={() => setTab("repeat")}>
             <CopyPlus size={18} />
             <span className="nav-label" data-short="Повтор">Повтор</span>
+          </button>
+          <button className={tab === "serial" ? "active" : ""} onClick={() => setTab("serial")}>
+            <CopyPlus size={18} />
+            <span className="nav-label" data-short="Серии">Серии</span>
           </button>
           <button className={tab === "analytics" ? "active" : ""} onClick={() => setTab("analytics")}>
             <BarChart3 size={18} />
@@ -896,6 +926,16 @@ export default function AdminDashboard() {
 
         {tab === "repeat" && (
           <RepeatPlanner
+            bookings={bookings}
+            onComplete={async (message) => {
+              await load();
+              showNotice("success", message);
+            }}
+          />
+        )}
+
+        {tab === "serial" && (
+          <SerialPlanner
             bookings={bookings}
             onComplete={async (message) => {
               await load();
@@ -1114,6 +1154,7 @@ export default function AdminDashboard() {
             onOpenStatus={openStatusTab}
             onOpenFilter={openFilteredBookings}
             onOpenDate={openScheduleDate}
+            onRefresh={load}
           />
         )}
         {tab === "prices" && (
@@ -1252,20 +1293,22 @@ function BookingEditor({
   const balance = Math.max(0, (Number(editor.salePricePerHour) || 0) * (editor.duration / 60) - paymentTotal);
   const sectorOptions = SECTORS[editor.format];
   const [editingPrice, setEditingPrice] = useState(false);
+  const [editingOldPrice, setEditingOldPrice] = useState(false);
   const [showInlinePayment, setShowInlinePayment] = useState(false);
   const [inlinePaymentForm, setInlinePaymentForm] = useState({
     amount: "",
     date: arenaDateValue(),
-    recipient: "Не выбран",
+    recipient: "ТОО AIR ARENA",
   });
 
   useEffect(() => {
     setInlinePaymentForm({
       amount: "",
       date: arenaDateValue(),
-      recipient: "Не выбран",
+      recipient: "ТОО AIR ARENA",
     });
     setEditingPrice(false);
+    setEditingOldPrice(false);
     setShowInlinePayment(false);
   }, [booking?.id]);
 
@@ -1408,6 +1451,9 @@ function BookingEditor({
 
         <div className="editor-totals">
           <div><span>Стоимость по прайсу</span><strong>{formatPrice(listPrice)}</strong></div>
+          {editor.oldPricePerHour && Number(editor.oldPricePerHour) > 0 && (
+            <div><span>Старая цена за час</span><strong className="old-price-strikethrough">{formatPrice(Number(editor.oldPricePerHour))}</strong></div>
+          )}
           <div className="totals-editable">
             <span>Фактическая стоимость за час</span>
             {editingPrice ? (
@@ -1416,11 +1462,12 @@ function BookingEditor({
                   type="number"
                   min="0"
                   className="totals-inline-input"
+                  placeholder="Введите цену"
                   value={editor.salePricePerHour}
                   onChange={(e) => onChange({ ...editor, salePricePerHour: e.target.value })}
                   autoFocus
-                  onBlur={() => setEditingPrice(false)}
-                  onKeyDown={(e) => { if (e.key === "Enter") setEditingPrice(false); }}
+                  onBlur={() => { if (editor.salePricePerHour !== "") setEditingPrice(false); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && editor.salePricePerHour !== "") setEditingPrice(false); }}
                 />
               </div>
             ) : (
@@ -1430,13 +1477,36 @@ function BookingEditor({
               </div>
             )}
           </div>
+          <div className="totals-editable">
+            <span>Старая цена за час (акционная)</span>
+            {editingOldPrice ? (
+              <div className="totals-edit-row">
+                <input
+                  type="number"
+                  min="0"
+                  className="totals-inline-input"
+                  placeholder="Старая цена"
+                  value={editor.oldPricePerHour}
+                  onChange={(e) => onChange({ ...editor, oldPricePerHour: e.target.value })}
+                  autoFocus
+                  onBlur={() => setEditingOldPrice(false)}
+                  onKeyDown={(e) => { if (e.key === "Enter") setEditingOldPrice(false); }}
+                />
+              </div>
+            ) : (
+              <div className="totals-value-row">
+                <strong>{editor.oldPricePerHour && Number(editor.oldPricePerHour) > 0 ? formatPrice(Number(editor.oldPricePerHour)) : "—"}</strong>
+                <button className="icon-edit-btn" onClick={() => setEditingOldPrice(true)} type="button" title="Изменить старую цену"><Pencil size={14} /></button>
+              </div>
+            )}
+          </div>
           <div><span>Итого к оплате</span><strong>{formatPrice(Math.max(0, (Number(editor.salePricePerHour) || 0) * (editor.duration / 60)))}</strong></div>
           <div className="totals-editable">
             <span>Оплачено</span>
             <div className="totals-value-row">
               <strong>{formatPrice(paymentTotal)}</strong>
               {!createMode && booking && (
-                <button className="icon-edit-btn icon-plus-btn" onClick={() => setShowInlinePayment(!showInlinePayment)} type="button" title="Добавить оплату"><Plus size={14} /></button>
+                <button className="icon-edit-btn" onClick={() => setShowInlinePayment(!showInlinePayment)} type="button" title="Добавить оплату"><Pencil size={14} /></button>
               )}
             </div>
           </div>
@@ -1456,7 +1526,7 @@ function BookingEditor({
                 method: "",
                 recipient: inlinePaymentForm.recipient,
               });
-              setInlinePaymentForm({ amount: "", date: arenaDateValue(), recipient: "Не выбран" });
+              setInlinePaymentForm({ amount: "", date: arenaDateValue(), recipient: "ТОО AIR ARENA" });
               setShowInlinePayment(false);
             }}
           >
@@ -1509,7 +1579,6 @@ function BookingEditor({
               <div className="payment-history-row" key={payment.id}>
                 <strong>{formatPrice(payment.amount)}</strong>
                 <span>{payment.date || "Без даты"}</span>
-                <span>{payment.method}</span>
                 <span>{payment.recipient}</span>
                 <button className="payment-delete-btn" title="Удалить оплату" type="button" disabled={saving} onClick={() => void onDeletePayment(payment.id)}><Trash2 size={14} /></button>
               </div>
@@ -1716,7 +1785,7 @@ function RepeatPlanner({
   );
 }
 
-type AnalyticsView = "overview" | "finance" | "utilization" | "clients" | "funnel" | "sources" | "operations";
+type AnalyticsView = "overview" | "finance" | "utilization" | "clients" | "funnel" | "sources" | "operations" | "ar";
 type RangePreset = "7d" | "30d" | "month" | "quarter" | "year" | "all" | "custom";
 
 type AnalyticsRow = {
@@ -1794,12 +1863,14 @@ function AnalyticsDashboard({
   onOpenStatus,
   onOpenFilter,
   onOpenDate,
+  onRefresh,
 }: {
   bookings: BookingRequest[];
   onOpenBooking: (bookingId: string, fallbackStatus?: QueueStatus) => void;
   onOpenStatus: (status: QueueStatus, bookingId?: string) => void;
   onOpenFilter: (nextTab: Tab, nextQuery: string) => void;
   onOpenDate: (date: string) => void;
+  onRefresh: () => void;
 }) {
   const today = arenaDateValue();
   const [view, setView] = useState<AnalyticsView>("overview");
@@ -2143,6 +2214,7 @@ function AnalyticsDashboard({
               ["funnel", "Воронка"],
               ["sources", "Источники"],
               ["operations", "Контроль"],
+              ["ar", "ДЗ"],
             ].map(([id, label]) => (
               <button
                 className={view === id ? "active" : ""}
@@ -2303,6 +2375,215 @@ function AnalyticsDashboard({
             <AnalyticsListCard title="Брони задним числом" rows={backdatedRowsLinked} />
           </div>
         </>
+      )}
+
+      {view === "ar" && (
+        <ArView
+          allConfirmed={allConfirmed}
+          onOpenBooking={onOpenBooking}
+          onRefresh={onRefresh}
+        />
+      )}
+    </>
+  );
+}
+
+function ArView({
+  allConfirmed,
+  onOpenBooking,
+  onRefresh,
+}: {
+  allConfirmed: BookingRequest[];
+  onOpenBooking: (bookingId: string, fallbackStatus?: QueueStatus) => void;
+  onRefresh: () => void;
+}) {
+  const today = arenaDateValue();
+  const [expandedPhone, setExpandedPhone] = useState<string | null>(null);
+  const [editingPhone, setEditingPhone] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const debtors = useMemo(() => {
+    const map = new Map<
+      string,
+      { phone: string; name: string; totalDebt: number; bookingCount: number; bookings: BookingRequest[]; lastDate: string }
+    >();
+    allConfirmed.forEach((item) => {
+      if (Number(item.balance) <= 0) return;
+      const key = normalizePhone(item.phone) || item.id;
+      const current = map.get(key) || {
+        phone: item.phone,
+        name: item.name,
+        totalDebt: 0,
+        bookingCount: 0,
+        bookings: [],
+        lastDate: item.date,
+      };
+      current.totalDebt += Number(item.balance) || 0;
+      current.bookingCount += 1;
+      current.bookings.push(item);
+      if (item.date > current.lastDate) current.lastDate = item.date;
+      map.set(key, current);
+    });
+    return Array.from(map.values()).sort((a, b) => b.totalDebt - a.totalDebt);
+  }, [allConfirmed]);
+
+  const totalDebt = debtors.reduce((sum, d) => sum + d.totalDebt, 0);
+  const avgDebt = debtors.length > 0 ? totalDebt / debtors.length : 0;
+
+  function monthlyBreakdown(bookings: BookingRequest[]) {
+    const months = new Map<string, { debt: number; count: number; items: BookingRequest[] }>();
+    bookings.forEach((b) => {
+      const month = b.date.slice(0, 7);
+      const cur = months.get(month) || { debt: 0, count: 0, items: [] };
+      cur.debt += Number(b.balance) || 0;
+      cur.count += 1;
+      cur.items.push(b);
+      months.set(month, cur);
+    });
+    return Array.from(months.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }
+
+  async function handleAdjustDebt() {
+    if (!editingPhone || saving) return;
+    const newBalance = Number(editValue);
+    if (!Number.isFinite(newBalance) || newBalance < 0) return;
+
+    setSaving(true);
+    try {
+      const res = await fetch("/api/bookings/batch/client-debt", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: editingPhone, newBalance }),
+      });
+      if (res.ok) {
+        setEditingPhone(null);
+        onRefresh();
+      }
+    } catch (err) {
+      console.error("Failed to adjust debt", err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="analytics-grid analytics-grid-wide">
+        <AnalyticsStatCard label="Общий долг" value={formatPrice(totalDebt)} hint={`${debtors.length} должников`} />
+        <AnalyticsStatCard label="Количество должников" value={String(debtors.length)} hint="Клиенты с долгом > 0" />
+        <AnalyticsStatCard label="Средний долг" value={formatPrice(avgDebt)} hint="На одного должника" />
+      </div>
+      <section className="admin-card analytics-table">
+        <div className="analytics-table-head">
+          <h2>Должники</h2>
+          <span>{debtors.length} клиентов</span>
+        </div>
+        {debtors.length === 0 && <div className="empty-state">Долгов нет</div>}
+        {debtors.map((debtor) => {
+          const isExpanded = expandedPhone === debtor.phone;
+          const months = monthlyBreakdown(debtor.bookings);
+
+          return (
+            <div key={debtor.phone}>
+              <div className="analytics-row analytics-row-danger">
+                <div>
+                  <strong>{debtor.name}</strong>
+                  <small>{debtor.phone} · {debtor.bookingCount} броней · последняя {debtor.lastDate}</small>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>{formatPrice(debtor.totalDebt)}</span>
+                  <button
+                    className="icon-edit-btn"
+                    type="button"
+                    title={isExpanded ? "Свернуть" : "Развернуть помесячно"}
+                    onClick={() => setExpandedPhone(isExpanded ? null : debtor.phone)}
+                  >
+                    {isExpanded ? "▲" : "▼"}
+                  </button>
+                  <button
+                    className="icon-edit-btn"
+                    type="button"
+                    title="Скорректировать долг"
+                    onClick={() => {
+                      setEditingPhone(debtor.phone);
+                      setEditValue(String(debtor.totalDebt));
+                    }}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {isExpanded && (
+                <div style={{ padding: "8px 16px", background: "var(--bg-muted, #f8faf8)", borderBottom: "1px solid var(--border-color, #dfe7e2)" }}>
+                  {months.map(([month, data]) => (
+                    <div key={month} style={{ marginBottom: 8 }}>
+                      <strong>{month}</strong>: {formatPrice(data.debt)} · {data.count} броней
+                      <div style={{ marginLeft: 12, marginTop: 2 }}>
+                        {data.items
+                          .sort((a, b) => b.date.localeCompare(a.date))
+                          .map((b) => (
+                            <button
+                              key={b.id}
+                              type="button"
+                              style={{
+                                display: "block",
+                                fontSize: 12,
+                                color: "var(--accent, #176b45)",
+                                cursor: "pointer",
+                                background: "none",
+                                border: "none",
+                                padding: "2px 0",
+                                textDecoration: "underline",
+                              }}
+                              onClick={() => onOpenBooking(b.id, "confirmed")}
+                            >
+                              {b.date} · {b.time} · {formatLabel(b.format)} · {formatPrice(b.balance)}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </section>
+
+      {editingPhone && (
+        <div className="modal-overlay" onClick={() => setEditingPhone(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="modal-head">
+              <h3>Корректировка долга</h3>
+              <button className="modal-close" type="button" onClick={() => setEditingPhone(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p style={{ marginBottom: 12, fontSize: 14, color: "var(--muted, #68766f)" }}>
+                Установите новый остаток долга. Текущий долг будет пропорционально распределён по всем броням клиента.
+              </p>
+              <div className="form-field">
+                <label>Новый остаток (0 = полностью оплачено):</label>
+                <input
+                  type="number"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  min={0}
+                  step={1}
+                />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button type="button" onClick={() => setEditingPhone(null)}>Отмена</button>
+              <button type="button" onClick={handleAdjustDebt} disabled={saving}>
+                {saving ? "Сохранение..." : "Сохранить"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

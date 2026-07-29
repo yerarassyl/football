@@ -76,6 +76,7 @@ type BookingRow = {
   price: number;
   list_price: number;
   sale_price: number;
+  old_price: number;
   name: string;
   phone: string;
   team: string;
@@ -110,6 +111,7 @@ function fromDbRow(row: BookingRow): BookingRequest {
     price: Number(row.sale_price || row.price) || 0,
     listPrice: Number(row.list_price) || 0,
     salePrice: Number(row.sale_price) || 0,
+    oldPrice: Number(row.old_price) || 0,
     name: row.name || "",
     phone: row.phone || "",
     team: row.team || "",
@@ -119,7 +121,7 @@ function fromDbRow(row: BookingRow): BookingRequest {
     paymentStatus: normalizePaymentStatus(row.payment_status),
     prepayment: Number(row.prepayment) || 0,
     balance: Number(row.balance) || 0,
-    paymentMethod: row.payment_method || "Не выбран",
+    paymentMethod: row.payment_method || "",
     paymentRecipient: row.payment_recipient || "",
     paidAt: row.paid_at || "",
     comment: row.comment || "",
@@ -144,6 +146,7 @@ function toDbRow(request: BookingRequest): Record<string, unknown> {
     price: enriched.salePrice,
     list_price: enriched.listPrice,
     sale_price: enriched.salePrice,
+    old_price: enriched.oldPrice,
     name: enriched.name,
     phone: enriched.phone,
     team: enriched.team,
@@ -194,13 +197,14 @@ function baseRequest(input: BookingInput, initial: Partial<InitialBookingState> 
     price: salePrice,
     listPrice,
     salePrice,
+    oldPrice: 0,
     source: input.source || "Сайт",
     sourceDetail: input.sourceDetail || "",
     status: initial.status || "new",
     paymentStatus: "unpaid",
     prepayment: 0,
     balance: salePrice,
-    paymentMethod: "Не выбран",
+    paymentMethod: "",
     paymentRecipient: "",
     paidAt: "",
     comment: initial.comment || "",
