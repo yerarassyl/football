@@ -492,7 +492,7 @@ export default function AdminDashboard() {
   }
 
   async function addPayment(payment: Omit<PaymentRecord, "id">) {
-    if (!selectedBooking) return;
+    if (!selectedBooking) return false;
     setSaving(true);
     try {
       const payments = [
@@ -504,8 +504,10 @@ export default function AdminDashboard() {
       ];
       await persistPatch(selectedBooking.id, { payments });
       showNotice("success", "Оплата добавлена");
+      return true;
     } catch (error) {
       showNotice("error", noticeText(error));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -1382,7 +1384,7 @@ function BookingEditor({
   editor:EditorState;
   fieldOptions:FieldOption[];
   mobileView:boolean;
-  onAddPayment:(payment:Omit<PaymentRecord,"id">)=>Promise<void>;
+  onAddPayment:(payment:Omit<PaymentRecord,"id">)=>Promise<boolean>;
   onDeletePayment:(paymentId:string)=>Promise<void>;
   onBack:()=>void;
   onChange:(editor:EditorState)=>void;
@@ -1402,6 +1404,22 @@ function BookingEditor({
     date: arenaDateValue(),
     recipient: "Не выбран",
   });
+
+  async function submitInlinePayment() {
+    const amount = Number(inlinePaymentForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+
+    const added = await onAddPayment({
+      amount,
+      date: inlinePaymentForm.date,
+      method: "",
+      recipient: inlinePaymentForm.recipient,
+    });
+    if (!added) return;
+
+    setInlinePaymentForm({ amount: "", date: arenaDateValue(), recipient: "Не выбран" });
+    setShowInlinePayment(false);
+  }
 
   useEffect(() => {
     setInlinePaymentForm({
@@ -1588,20 +1606,12 @@ function BookingEditor({
         </div>
 
         {showInlinePayment && !createMode && booking && (
-          <form
+          <div
             className="inline-payment-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const amount = Number(inlinePaymentForm.amount);
-              if (!Number.isFinite(amount) || amount <= 0) return;
-              void onAddPayment({
-                amount,
-                date: inlinePaymentForm.date,
-                method: "",
-                recipient: inlinePaymentForm.recipient,
-              });
-              setInlinePaymentForm({ amount: "", date: arenaDateValue(), recipient: "Не выбран" });
-              setShowInlinePayment(false);
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              void submitInlinePayment();
             }}
           >
             <div className="inline-payment-grid">
@@ -1620,10 +1630,10 @@ function BookingEditor({
                 </select>
               </label>
               <div className="inline-payment-submit">
-                <button className="secondary-button" disabled={saving} type="submit"><CircleDollarSign size={16} /> Добавить оплату</button>
+                <button className="secondary-button" disabled={saving} type="button" onClick={() => void submitInlinePayment()}><CircleDollarSign size={16} /> Добавить оплату</button>
               </div>
             </div>
-          </form>
+          </div>
         )}
 
         <div className="editor-actions">
