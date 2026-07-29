@@ -491,19 +491,42 @@ export default function AdminDashboard() {
     }
   }
 
-  async function addPayment(payment: Omit<PaymentRecord, "id">) {
-    if (!selectedBooking) return false;
+  async function addPaymentToBooking(bookingId: string, payment: Omit<PaymentRecord, "id">) {
+    const booking = bookings.find((item) => item.id === bookingId);
+    if (!booking) return false;
     setSaving(true);
     try {
       const payments = [
-        ...selectedBooking.payments,
+        ...booking.payments,
         {
           id: `PAY-${Date.now()}`,
           ...payment,
         },
       ];
-      await persistPatch(selectedBooking.id, { payments });
+      await persistPatch(booking.id, { payments });
       showNotice("success", "Оплата добавлена");
+      return true;
+    } catch (error) {
+      showNotice("error", noticeText(error));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addPayment(payment: Omit<PaymentRecord, "id">) {
+    if (!selectedBooking) return false;
+    return addPaymentToBooking(selectedBooking.id, payment);
+  }
+
+  async function deletePaymentFromBooking(bookingId: string, paymentId: string) {
+    const booking = bookings.find((item) => item.id === bookingId);
+    if (!booking) return false;
+    setSaving(true);
+    try {
+      const payments = booking.payments.filter((payment) => payment.id !== paymentId);
+      await persistPatch(booking.id, { payments });
+      showNotice("success", "Оплата удалена");
       return true;
     } catch (error) {
       showNotice("error", noticeText(error));
@@ -515,16 +538,7 @@ export default function AdminDashboard() {
 
   async function deletePayment(paymentId: string) {
     if (!selectedBooking) return;
-    setSaving(true);
-    try {
-      const payments = selectedBooking.payments.filter((p) => p.id !== paymentId);
-      await persistPatch(selectedBooking.id, { payments });
-      showNotice("success", "Оплата удалена");
-    } catch (error) {
-      showNotice("error", noticeText(error));
-    } finally {
-      setSaving(false);
-    }
+    await deletePaymentFromBooking(selectedBooking.id, paymentId);
   }
 
   async function moveToTrash(id: string) {
@@ -717,14 +731,6 @@ export default function AdminDashboard() {
     setSelectedId("");
     setQuery(nextQuery);
     setTab(nextTab);
-  }
-
-  function openScheduleDate(date: string) {
-    setCreateMode(false);
-    setSelectedId("");
-    setQuery("");
-    setSelectedDate(date);
-    setTab("schedule");
   }
 
   function openMobileBookings(nextTab: QueueTab | "trash" = "status:confirmed") {
@@ -1153,9 +1159,10 @@ export default function AdminDashboard() {
           <AnalyticsDashboard
             bookings={bookings}
             onOpenBooking={openBookingDetails}
-            onOpenStatus={openStatusTab}
             onOpenFilter={openFilteredBookings}
-            onOpenDate={openScheduleDate}
+            onAddPayment={addPaymentToBooking}
+            onDeletePayment={deletePaymentFromBooking}
+            saving={saving}
           />
         )}
         {tab === "prices" && (
@@ -1870,7 +1877,7 @@ function RepeatPlanner({
   );
 }
 
-type AnalyticsView = "overview" | "finance" | "utilization" | "clients" | "funnel" | "sources" | "operations";
+type AnalyticsView = "debt" | "finance" | "utilization" | "clients" | "sources";
 type RangePreset = "7d" | "30d" | "month" | "quarter" | "year" | "all" | "custom";
 
 type AnalyticsRow = {
@@ -1882,9 +1889,20 @@ type AnalyticsRow = {
   bookingId?: string;
 };
 
-function dateOnly(value: string) {
-  return value ? value.slice(0, 10) : "";
-}
+type DebtMonth = {
+  id: string;
+  label: string;
+  debt: number;
+  bookings: BookingRequest[];
+};
+
+type DebtClient = {
+  id: string;
+  name: string;
+  phone: string;
+  debt: number;
+  months: DebtMonth[];
+};
 
 function periodStartDate(today: string, preset: Exclude<RangePreset, "custom">) {
   const base = new Date(`${today}T00:00:00`);
@@ -1909,17 +1927,20 @@ function normalizePhone(phone: string) {
   return phone.replace(/\D/g, "");
 }
 
+function monthLabel(value: string) {
+  const [year, month] = value.split("-").map(Number);
+  if (!year || !month) return value;
+  const formatted = new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" })
+    .format(new Date(year, month - 1, 1));
+  return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+}
+
 function hours(value: number) {
   return `${value.toFixed(1)} ч.`;
 }
 
 function percentage(value: number) {
   return `${value.toFixed(1)}%`;
-}
-
-function average(values: number[]) {
-  if (values.length === 0) return 0;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function between(value: string, from: string, to: string) {
@@ -1931,13 +1952,6 @@ function daysBetween(from: string, to: string) {
   return Math.max(1, diffDays(from, to) + 1);
 }
 
-function hoursBetween(fromIso: string, toIso: string) {
-  const from = new Date(fromIso).getTime();
-  const to = new Date(toIso).getTime();
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
-  return (to - from) / 3_600_000;
-}
-
 function occupiedUnits(booking: BookingRequest) {
   return booking.sector.split("+").filter(Boolean).length || (booking.format === "full" ? 4 : booking.format === "half" ? 2 : 1);
 }
@@ -1945,18 +1959,20 @@ function occupiedUnits(booking: BookingRequest) {
 function AnalyticsDashboard({
   bookings,
   onOpenBooking,
-  onOpenStatus,
   onOpenFilter,
-  onOpenDate,
+  onAddPayment,
+  onDeletePayment,
+  saving,
 }: {
   bookings: BookingRequest[];
   onOpenBooking: (bookingId: string, fallbackStatus?: QueueStatus) => void;
-  onOpenStatus: (status: QueueStatus, bookingId?: string) => void;
   onOpenFilter: (nextTab: Tab, nextQuery: string) => void;
-  onOpenDate: (date: string) => void;
+  onAddPayment: (bookingId: string, payment: Omit<PaymentRecord, "id">) => Promise<boolean>;
+  onDeletePayment: (bookingId: string, paymentId: string) => Promise<boolean>;
+  saving: boolean;
 }) {
   const today = arenaDateValue();
-  const [view, setView] = useState<AnalyticsView>("overview");
+  const [view, setView] = useState<AnalyticsView>("debt");
   const [preset, setPreset] = useState<RangePreset>("month");
   const [customFrom, setCustomFrom] = useState(periodStartDate(today, "month"));
   const [customTo, setCustomTo] = useState(today);
@@ -1976,11 +1992,6 @@ function AnalyticsDashboard({
     [allActive, range.from, range.to],
   );
 
-  const byCreatedDate = useMemo(
-    () => allActive.filter((item) => between(dateOnly(item.createdAt), range.from, range.to)),
-    [allActive, range.from, range.to],
-  );
-
   const activeBooked = useMemo(
     () => byBookingDate,
     [byBookingDate],
@@ -1997,11 +2008,48 @@ function AnalyticsDashboard({
     [allActive],
   );
 
-  // Removed cancelled as per request
-  // const cancelled = useMemo(
-  //   () => byCreatedDate.filter((item) => item.status === "cancelled"),
-  //   [byCreatedDate],
-  // );
+  const debtClients = useMemo(() => {
+    const clientsMap = allConfirmed
+      .filter((booking) => booking.balance > 0)
+      .reduce<Map<string, { id: string; name: string; phone: string; bookings: BookingRequest[] }>>((map, booking) => {
+        const id = normalizePhone(booking.phone) || booking.id;
+        const client = map.get(id) || {
+          id,
+          name: booking.name,
+          phone: booking.phone,
+          bookings: [],
+        };
+        client.bookings.push(booking);
+        if (booking.date >= (client.bookings[0]?.date || "")) client.name = booking.name;
+        map.set(id, client);
+        return map;
+      }, new Map());
+
+    return Array.from(clientsMap.values())
+      .map<DebtClient>((client) => {
+        const monthsMap = client.bookings.reduce<Map<string, BookingRequest[]>>((map, booking) => {
+          const month = booking.date.slice(0, 7);
+          map.set(month, [...(map.get(month) || []), booking]);
+          return map;
+        }, new Map());
+        const months = Array.from(monthsMap.entries())
+          .sort((a, b) => b[0].localeCompare(a[0]))
+          .map(([id, monthBookings]) => ({
+            id,
+            label: monthLabel(id),
+            debt: monthBookings.reduce((sum, booking) => sum + booking.balance, 0),
+            bookings: [...monthBookings].sort((a, b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time)),
+          }));
+        return {
+          id: client.id,
+          name: client.name,
+          phone: client.phone,
+          debt: client.bookings.reduce((sum, booking) => sum + booking.balance, 0),
+          months,
+        };
+      })
+      .sort((a, b) => b.debt - a.debt || a.name.localeCompare(b.name));
+  }, [allConfirmed]);
 
   const periodDays = daysBetween(range.from, range.to);
   const fieldHours = activeBooked.reduce((sum, item) => sum + (item.duration / 60) * occupiedUnits(item), 0);
@@ -2017,8 +2065,6 @@ function AnalyticsDashboard({
   };
   const averageCheck = averageConfirmed(confirmed);
   const upcomingConfirmed = activeBooked.filter((item) => item.date >= today && item.status === "confirmed");
-  const todayRevenue = confirmed.filter((item) => item.date === today).reduce((sum, item) => sum + item.salePrice, 0);
-  const todayBookings = activeBooked.filter((item) => item.date === today).length;
 
   const clients = Array.from(activeBooked.reduce<Map<string, {
     phone: string;
@@ -2047,27 +2093,6 @@ function AnalyticsDashboard({
     current.debt += Number(item.balance) || 0;
     current.lastDate = current.lastDate > item.date ? current.lastDate : item.date;
     current.sources.add(item.source || "Сайт");
-    map.set(key, current);
-    return map;
-  }, new Map()).values());
-
-  // All-time client aggregation for debt tracking (not limited to date range)
-  const allClients = Array.from(allActive.reduce<Map<string, {
-    phone: string;
-    name: string;
-    bookings: number;
-    debt: number;
-  }>>((map, item) => {
-    if (item.status !== "confirmed") return map;
-    const key = normalizePhone(item.phone) || item.id;
-    const current = map.get(key) || {
-      phone: item.phone,
-      name: item.name,
-      bookings: 0,
-      debt: 0,
-    };
-    current.bookings += 1;
-    current.debt += Number(item.balance) || 0;
     map.set(key, current);
     return map;
   }, new Map()).values());
@@ -2109,25 +2134,6 @@ function AnalyticsDashboard({
     onClick: () => onOpenFilter("status:confirmed", source.label),
   }));
 
-  const financeRows: AnalyticsRow[] = Array.from(confirmed.reduce<Map<string, { revenue: number; paid: number; debt: number; bookings: number }>>((map, item) => {
-    const key = item.date;
-    const current = map.get(key) || { revenue: 0, paid: 0, debt: 0, bookings: 0 };
-    current.revenue += Number(item.salePrice || item.price) || 0;
-    current.paid += Number(item.prepayment) || 0;
-    current.debt += Number(item.balance) || 0;
-    current.bookings += 1;
-    map.set(key, current);
-    return map;
-  }, new Map()).entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(-10)
-    .map(([date, item]) => ({
-      label: date,
-      value: formatPrice(item.revenue),
-      meta: `${item.bookings} броней · оплачено ${formatPrice(item.paid)} · долг ${formatPrice(item.debt)}`,
-      onClick: () => onOpenDate(date),
-    }));
-
   const recipientRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => item.paymentRecipient || "Не указан", (item) => Number(item.prepayment) || 0, true)
     .map((row) => ({ ...row, onClick: () => onOpenFilter("status:confirmed", row.label) }));
   const methodRows: AnalyticsRow[] = aggregateRows(confirmed, (item) => item.paymentMethod || "Не выбран", (item) => Number(item.prepayment) || 0, true)
@@ -2138,38 +2144,6 @@ function AnalyticsDashboard({
     .map((row) => ({ ...row, onClick: () => onOpenFilter("schedule", row.label) }));
   const timeRows: AnalyticsRow[] = aggregateRows(activeBooked, (item) => item.time, (item) => item.duration / 60, false, "ч.")
     .map((row) => ({ ...row, onClick: () => onOpenFilter("schedule", row.label) }));
-
-  const funnelCreated = byCreatedDate.length;
-  const funnelConfirmed = byCreatedDate.filter((item) => item.status === "confirmed").length;
-  const funnelPaid = byCreatedDate.filter((item) => item.status === "confirmed" && item.paymentStatus === "paid").length;
-  // Removed cancelled from funnel as per request
-  // const funnelCancelled = byCreatedDate.filter((item) => item.status === "cancelled").length;
-  const avgToPayment = average(
-    byCreatedDate
-      .map((item) => {
-        const firstPayment = [...item.payments].sort((a, b) => a.date.localeCompare(b.date))[0];
-        if (!firstPayment?.date) return null;
-        return hoursBetween(item.createdAt, `${firstPayment.date}T00:00:00`);
-      })
-      .filter((value): value is number => value != null),
-  );
-  const avgToConfirm = average(
-    byCreatedDate
-      .map((item) => item.confirmedAt ? hoursBetween(item.createdAt, item.confirmedAt) : null)
-      .filter((value): value is number => value != null),
-  );
-
-  const overdueRows: AnalyticsRow[] = allConfirmed
-    .filter((item) => item.balance > 0 && item.date <= today)
-    .sort((a, b) => b.balance - a.balance)
-    .slice(0, 8)
-    .map((item) => ({
-      label: item.name,
-      value: formatPrice(item.balance),
-      meta: `${item.date} · ${item.phone} · ${formatLabel(item.format)}`,
-      tone: "danger",
-      bookingId: item.id,
-    }));
 
   const discountRows: AnalyticsRow[] = confirmed
     .filter((item) => item.salePrice < item.listPrice)
@@ -2183,80 +2157,9 @@ function AnalyticsDashboard({
       bookingId: item.id,
     }));
 
-  const partialUpcomingRows: AnalyticsRow[] = activeBooked
-    .filter((item) => item.date >= today && diffDays(today, item.date) <= 3 && item.balance > 0)
-    .sort(bookingSort)
-    .slice(0, 8)
-    .map((item) => ({
-      label: `${item.name} · ${item.date}`,
-      value: formatPrice(item.balance),
-      meta: `${item.time}-${bookingEndTime(item.time, item.duration)} · ${item.paymentStatus}`,
-      tone: "warning",
-      bookingId: item.id,
-    }));
-
-  const backdatedRows: AnalyticsRow[] = byCreatedDate
-    .filter((item) => dateOnly(item.createdAt) > item.date)
-    .slice(0, 8)
-    .map((item) => ({
-      label: item.name,
-      value: `${item.date}`,
-      meta: `Создано ${dateOnly(item.createdAt)} · ${item.time}`,
-      tone: "neutral",
-      bookingId: item.id,
-    }));
-
-  const noCommentCount = confirmed.filter((item) => !item.comment.trim()).length;
-
-  const overdueRowsLinked = overdueRows.map((row) =>
-    row.bookingId ? { ...row, onClick: () => onOpenBooking(row.bookingId!, "confirmed") } : row,
-  );
-
   const discountRowsLinked = discountRows.map((row) =>
     row.bookingId ? { ...row, onClick: () => onOpenBooking(row.bookingId!, "confirmed") } : row,
   );
-
-  const partialUpcomingRowsLinked = partialUpcomingRows.map((row) => {
-    if (!row.bookingId) return row;
-    const booking = activeBooked.find((b) => b.id === row.bookingId);
-    return {
-      ...row,
-      onClick: () => onOpenBooking(row.bookingId!, booking?.status === "in_progress" ? "in_progress" : "confirmed"),
-    };
-  });
-
-  const backdatedRowsLinked = backdatedRows.map((row) => {
-    if (!row.bookingId) return row;
-    const booking = byCreatedDate.find((b) => b.id === row.bookingId);
-    return {
-      ...row,
-      onClick: () =>
-        onOpenBooking(
-          row.bookingId!,
-          booking?.status === "cancelled"
-            ? "cancelled"
-            : booking?.status === "in_progress"
-              ? "in_progress"
-              : booking?.status === "new"
-                ? "new"
-                : "confirmed",
-        ),
-    };
-  });
-
-  
-  const overviewCards = [
-    { label: "Выручка сегодня", value: formatPrice(todayRevenue), hint: `${todayBookings} броней сегодня` },
-    { label: "Выручка периода", value: formatPrice(revenue), hint: `${confirmed.length} подтвержденных` },
-    { label: "Оплачено", value: formatPrice(paid), hint: "Фактические поступления" },
-    { label: "Долг", value: formatPrice(debt), hint: `${overdueRows.length} просроченных` },
-    { label: "Загрузка", value: percentage(utilizationRate), hint: `${hours(fieldHours)} из ${hours(totalCapacityHours)}` },
-    { label: "Средний чек", value: formatPrice(averageCheck), hint: "По подтвержденным броням" },
-    { label: "Новые заявки", value: String(byCreatedDate.filter((item) => item.status === "new").length), hint: "Созданы в периоде" },
-    { label: "Конверсия", value: percentage(funnelCreated ? (funnelConfirmed / funnelCreated) * 100 : 0), hint: "Из заявки в подтверждение" },
-    { label: "Повторные клиенты", value: String(repeatClients), hint: `${newClients} новых` },
-    { label: "Топ источник", value: sourceStats[0]?.label || "Нет данных", hint: sourceStats[0] ? formatPrice(sourceStats[0].revenue) : "Пока пусто" },
-  ];
 
   const handleExport = async () => {
     try {
@@ -2282,7 +2185,7 @@ function AnalyticsDashboard({
         <div>
           <div className="section-kicker">BI внутри админки</div>
           <h1>Аналитика</h1>
-          <p>Сводка, финансы, загрузка, клиенты, воронка, источники и операционный контроль без внешних BI-сервисов.</p>
+          <p>Финансы, дебиторская задолженность, загрузка, клиенты и источники в одном месте.</p>
         </div>
       </div>
 
@@ -2290,13 +2193,11 @@ function AnalyticsDashboard({
         <div className="analytics-toolbar">
           <div className="analytics-tabs">
             {[
-              ["overview", "Сводка"],
+              ["debt", "ДЗ"],
               ["finance", "Финансы"],
               ["utilization", "Загрузка"],
               ["clients", "Клиенты"],
-              ["funnel", "Воронка"],
               ["sources", "Источники"],
-              ["operations", "Контроль"],
             ].map(([id, label]) => (
               <button
                 className={view === id ? "active" : ""}
@@ -2308,7 +2209,7 @@ function AnalyticsDashboard({
               </button>
             ))}
           </div>
-          <div className="analytics-range">
+          {view !== "debt" && <div className="analytics-range">
             <select value={preset} onChange={(event) => setPreset(event.target.value as RangePreset)}>
               <option value="7d">7 дней</option>
               <option value="30d">30 дней</option>
@@ -2328,23 +2229,18 @@ function AnalyticsDashboard({
             <button className="analytics-export-btn" onClick={handleExport} type="button" title="Скачать Excel">
               <Download size={16} /> Скачать XLSX
             </button>
-          </div>
+          </div>}
         </div>
       </section>
 
-      {view === "overview" && (
-        <>
-          <div className="analytics-grid analytics-grid-wide">
-            {overviewCards.map((card) => (
-              <AnalyticsStatCard key={card.label} label={card.label} value={card.value} hint={card.hint} />
-            ))}
-          </div>
-          <div className="analytics-tables analytics-tables-wide">
-            <AnalyticsListCard title="Финансы по дням" rows={financeRows} />
-            <AnalyticsListCard title="Топ клиенты" rows={topClients} />
-            <AnalyticsListCard title="Топ источники" rows={sourceRows.slice(0, 8)} />
-          </div>
-        </>
+      {view === "debt" && (
+        <DebtReceivables
+          clients={debtClients}
+          onAddPayment={onAddPayment}
+          onDeletePayment={onDeletePayment}
+          onOpenBooking={onOpenBooking}
+          saving={saving}
+        />
       )}
 
       {view === "finance" && (
@@ -2352,14 +2248,13 @@ function AnalyticsDashboard({
           <div className="analytics-grid analytics-grid-wide">
             <AnalyticsStatCard label="Плановая выручка" value={formatPrice(revenue)} hint="Подтвержденные брони периода" />
             <AnalyticsStatCard label="Фактически оплачено" value={formatPrice(paid)} hint="Сумма всех оплат" />
-            <AnalyticsStatCard label="Остаток долга" value={formatPrice(debt)} hint={`${overdueRows.length} просроченных броней`} />
+            <AnalyticsStatCard label="Остаток долга" value={formatPrice(debt)} hint={`${allConfirmed.filter((booking) => booking.balance > 0).length} неоплаченных броней`} />
             <AnalyticsStatCard label="Средний чек" value={formatPrice(averageCheck)} hint="По подтвержденным" />
           </div>
           <div className="analytics-tables analytics-tables-wide">
             <AnalyticsListCard title="Поступления по способам оплаты" rows={methodRows} />
             <AnalyticsListCard title="Поступления по получателям" rows={recipientRows} />
             <AnalyticsListCard title="Скидки ниже прайса" rows={discountRowsLinked} />
-            <AnalyticsListCard title="Долги клиентов" rows={overdueRowsLinked} />
           </div>
         </>
       )}
@@ -2390,38 +2285,6 @@ function AnalyticsDashboard({
           </div>
           <div className="analytics-tables analytics-tables-wide">
             <AnalyticsListCard title="Топ клиенты по выручке" rows={topClients} />
-            <AnalyticsListCard
-              title="Клиенты с долгами"
-              rows={Array.from(allClients).filter((client) => client.debt > 0).sort((a, b) => b.debt - a.debt).slice(0, 8).map((client) => ({
-                label: client.name,
-                value: formatPrice(client.debt),
-                meta: `${client.bookings} броней · ${client.phone}`,
-              }))}
-            />
-          </div>
-        </>
-      )}
-
-      {view === "funnel" && (
-        <>
-          <div className="analytics-grid analytics-grid-wide">
-            <AnalyticsStatCard label="Новые заявки" value={String(funnelCreated)} hint="Созданы в периоде" />
-            <AnalyticsStatCard label="Подтверждено" value={String(funnelConfirmed)} hint={percentage(funnelCreated ? (funnelConfirmed / funnelCreated) * 100 : 0)} />
-            <AnalyticsStatCard label="Полностью оплачено" value={String(funnelPaid)} hint={percentage(funnelConfirmed ? (funnelPaid / funnelConfirmed) * 100 : 0)} />
-            {/* Removed Отменено as per request */}
-            <AnalyticsStatCard label="До подтверждения" value={avgToConfirm ? hours(avgToConfirm) : "Нет данных"} hint="Среднее время реакции" />
-            <AnalyticsStatCard label="До первой оплаты" value={avgToPayment ? hours(avgToPayment) : "Нет данных"} hint="От заявки до денег" />
-          </div>
-          <div className="analytics-tables">
-            <AnalyticsListCard
-              title="Статусы заявок"
-              rows={[
-                { label: "Новые", value: String(byCreatedDate.filter((item) => item.status === "new").length), meta: "Ожидают обработки", onClick: () => onOpenStatus("new") },
-                { label: "В работе", value: String(byCreatedDate.filter((item) => item.status === "in_progress").length), meta: "На контроле администратора", onClick: () => onOpenStatus("in_progress") },
-                { label: "Подтвержденные", value: String(byCreatedDate.filter((item) => item.status === "confirmed").length), meta: "Успешно проведены", onClick: () => onOpenStatus("confirmed") },
-                /* Removed Отмененные as per request */
-              ]}
-            />
           </div>
         </>
       )}
@@ -2443,21 +2306,197 @@ function AnalyticsDashboard({
         </>
       )}
 
-      {view === "operations" && (
-        <>
-          <div className="analytics-grid analytics-grid-wide">
-            <AnalyticsStatCard label="Просроченные долги" value={String(overdueRows.length)} hint="Нужен контакт с клиентами" />
-            <AnalyticsStatCard label="Без комментария" value={String(noCommentCount)} hint="Не хватает контекста для админа" />
-            <AnalyticsStatCard label="Частичные оплаты 3 дня" value={String(partialUpcomingRows.length)} hint="Нужно дожать оплату" />
-            <AnalyticsStatCard label="Задним числом" value={String(backdatedRows.length)} hint="Брони созданы после даты игры" />
+    </>
+  );
+}
+
+function DebtReceivables({
+  clients,
+  onAddPayment,
+  onDeletePayment,
+  onOpenBooking,
+  saving,
+}: {
+  clients: DebtClient[];
+  onAddPayment: (bookingId: string, payment: Omit<PaymentRecord, "id">) => Promise<boolean>;
+  onDeletePayment: (bookingId: string, paymentId: string) => Promise<boolean>;
+  onOpenBooking: (bookingId: string, fallbackStatus?: QueueStatus) => void;
+  saving: boolean;
+}) {
+  const [paymentBookingId, setPaymentBookingId] = useState("");
+  const [paymentForm, setPaymentForm] = useState({
+    amount: "",
+    date: arenaDateValue(),
+    recipient: "Не выбран",
+  });
+  const totalDebt = clients.reduce((sum, client) => sum + client.debt, 0);
+  const debtBookings = clients.reduce(
+    (sum, client) => sum + client.months.reduce((monthSum, month) => monthSum + month.bookings.length, 0),
+    0,
+  );
+
+  function togglePaymentForm(bookingId: string) {
+    setPaymentBookingId((current) => current === bookingId ? "" : bookingId);
+    setPaymentForm({ amount: "", date: arenaDateValue(), recipient: "Не выбран" });
+  }
+
+  async function submitPayment(bookingId: string) {
+    const amount = Number(paymentForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    const added = await onAddPayment(bookingId, {
+      amount,
+      date: paymentForm.date,
+      method: "",
+      recipient: paymentForm.recipient,
+    });
+    if (!added) return;
+    setPaymentBookingId("");
+    setPaymentForm({ amount: "", date: arenaDateValue(), recipient: "Не выбран" });
+  }
+
+  return (
+    <>
+      <div className="analytics-grid debt-summary-grid">
+        <AnalyticsStatCard label="Общая ДЗ" value={formatPrice(totalDebt)} hint="По всем подтвержденным заявкам" />
+        <AnalyticsStatCard label="Клиентов с долгом" value={String(clients.length)} hint="Сгруппированы по телефону" />
+        <AnalyticsStatCard label="Неоплаченных заявок" value={String(debtBookings)} hint="С остатком больше нуля" />
+      </div>
+
+      <section className="admin-card debt-ledger">
+        <div className="debt-ledger-head">
+          <div>
+            <h2>ДЗ (Дебиторская задолженность)</h2>
+            <p>Задолженность по клиентам, месяцам и отдельным заявкам.</p>
           </div>
-          <div className="analytics-tables analytics-tables-wide">
-            <AnalyticsListCard title="Просроченные долги" rows={overdueRowsLinked} />
-            <AnalyticsListCard title="Частично оплаченные ближайшие брони" rows={partialUpcomingRowsLinked} />
-            <AnalyticsListCard title="Брони задним числом" rows={backdatedRowsLinked} />
-          </div>
-        </>
-      )}
+          <strong>{formatPrice(totalDebt)}</strong>
+        </div>
+
+        {clients.length === 0 && <div className="empty-state">Дебиторской задолженности нет</div>}
+
+        <div className="debt-client-list">
+          {clients.map((client) => (
+            <details className="debt-client" key={client.id}>
+              <summary>
+                <div>
+                  <strong>{client.name}</strong>
+                  <span>
+                    {client.phone || "Телефон не указан"} · {client.months.length}{" "}
+                    {client.months.length === 1 ? "месяц" : client.months.length < 5 ? "месяца" : "месяцев"}
+                  </span>
+                </div>
+                <b>{formatPrice(client.debt)}</b>
+              </summary>
+
+              <div className="debt-month-list">
+                {client.months.map((month) => (
+                  <details className="debt-month" key={`${client.id}-${month.id}`} open>
+                    <summary>
+                      <strong>{month.label}</strong>
+                      <span>
+                        {month.bookings.length}{" "}
+                        {month.bookings.length === 1 ? "заявка" : month.bookings.length < 5 ? "заявки" : "заявок"} ·{" "}
+                        {formatPrice(month.debt)}
+                      </span>
+                    </summary>
+
+                    <div className="debt-booking-list">
+                      {month.bookings.map((booking) => (
+                        <article className="debt-booking" key={booking.id}>
+                          <div className="debt-booking-head">
+                            <div>
+                              <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
+                              <span>{formatLabel(booking.format)} · {booking.team || booking.phone}</span>
+                            </div>
+                            <button type="button" onClick={() => onOpenBooking(booking.id, "confirmed")}>
+                              Открыть заявку
+                            </button>
+                          </div>
+
+                          <div className="debt-booking-finance">
+                            <span><small>Сумма</small><strong>{formatPrice(booking.salePrice || booking.price)}</strong></span>
+                            <span><small>Оплачено</small><strong>{formatPrice(booking.prepayment)}</strong></span>
+                            <span className="debt-amount"><small>Долг</small><strong>{formatPrice(booking.balance)}</strong></span>
+                          </div>
+
+                          {booking.payments.length > 0 && (
+                            <div className="debt-payments">
+                              {booking.payments.map((payment) => (
+                                <div className="debt-payment" key={payment.id}>
+                                  <span>{payment.date || "Без даты"}</span>
+                                  <strong>{formatPrice(payment.amount)}</strong>
+                                  {payment.recipient && payment.recipient !== "Не выбран" && <span>{payment.recipient}</span>}
+                                  <button
+                                    aria-label={`Удалить оплату ${formatPrice(payment.amount)}`}
+                                    disabled={saving}
+                                    onClick={() => void onDeletePayment(booking.id, payment.id)}
+                                    type="button"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {paymentBookingId === booking.id ? (
+                            <div
+                              className="debt-payment-form"
+                              onKeyDown={(event) => {
+                                if (event.key !== "Enter") return;
+                                event.preventDefault();
+                                void submitPayment(booking.id);
+                              }}
+                            >
+                              <label>
+                                <span>Сумма</span>
+                                <input
+                                  className="no-stepper"
+                                  inputMode="numeric"
+                                  min="1"
+                                  onChange={(event) => setPaymentForm({ ...paymentForm, amount: event.target.value })}
+                                  type="number"
+                                  value={paymentForm.amount}
+                                />
+                              </label>
+                              <label>
+                                <span>Дата</span>
+                                <input
+                                  onChange={(event) => setPaymentForm({ ...paymentForm, date: event.target.value })}
+                                  type="date"
+                                  value={paymentForm.date}
+                                />
+                              </label>
+                              <label>
+                                <span>Получатель</span>
+                                <select
+                                  onChange={(event) => setPaymentForm({ ...paymentForm, recipient: event.target.value })}
+                                  value={paymentForm.recipient}
+                                >
+                                  {paymentRecipients.map((recipient) => <option key={recipient}>{recipient}</option>)}
+                                </select>
+                              </label>
+                              <div className="debt-payment-actions">
+                                <button className="secondary-button" onClick={() => setPaymentBookingId("")} type="button">Отмена</button>
+                                <button className="primary-button" disabled={saving || !paymentForm.amount} onClick={() => void submitPayment(booking.id)} type="button">
+                                  <CircleDollarSign size={15} /> Добавить
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button className="debt-add-payment" onClick={() => togglePaymentForm(booking.id)} type="button">
+                              <Plus size={15} /> Добавить оплату
+                            </button>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            </details>
+          ))}
+        </div>
+      </section>
     </>
   );
 }
