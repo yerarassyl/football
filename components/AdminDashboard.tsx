@@ -5,6 +5,7 @@ import {
   CalendarDays,
   Check,
   ChevronLeft,
+  ChevronRight,
   CircleDollarSign,
   CopyPlus,
   Download,
@@ -21,7 +22,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { enrichBooking, formatLabel } from "@/lib/booking";
+import { enrichBooking, findBookingConflict, formatLabel } from "@/lib/booking";
 import { FIELD_OPTIONS, FieldOption, formatPrice, SECTORS, DURATION_OPTIONS, TIME_SLOTS } from "@/lib/constants";
 import { arenaDateValue, bookingEndTime, formatDuration } from "@/lib/time";
 import { BookingRequest, FieldFormat, PaymentRecord, RequestStatus } from "@/lib/types";
@@ -945,6 +946,7 @@ export default function AdminDashboard() {
         {tab === "repeat" && (
           <RepeatPlanner
             bookings={bookings}
+            fieldOptions={fieldOptions}
             onComplete={async (message) => {
               await load();
               showNotice("success", message);
@@ -1684,120 +1686,180 @@ function BookingEditor({
 
 function RepeatPlanner({
   bookings,
+  fieldOptions,
   onComplete,
 }: {
   bookings: BookingRequest[];
+  fieldOptions: FieldOption[];
   onComplete: (message: string) => Promise<void>;
 }) {
   const today = arenaDateValue();
-  const [sourceFrom, setSourceFrom] = useState(today);
-  const [sourceTo, setSourceTo] = useState(today);
-  const [mode, setMode] = useState<"once" | "month" | "until">("once");
-  const [targetStart, setTargetStart] = useState(addDays(today, 7));
-  const [untilDate, setUntilDate] = useState(addDays(today, 28));
+  const nextMonthDate = new Date(`${today}T12:00:00`);
+  nextMonthDate.setMonth(nextMonthDate.getMonth() + 1, 1);
+  const initialMonth = nextMonthDate.toISOString().slice(0, 7);
+  const [mode, setMode] = useState<"recurring" | "dates">("recurring");
+  const [periodKind, setPeriodKind] = useState<"month" | "range">("month");
+  const [periodMonth, setPeriodMonth] = useState(initialMonth);
+  const [periodFrom, setPeriodFrom] = useState(`${initialMonth}-01`);
+  const [periodTo, setPeriodTo] = useState(lastDayOfMonth(initialMonth));
+  const [weekdays, setWeekdays] = useState<number[]>([1]);
+  const [calendarMonth, setCalendarMonth] = useState(initialMonth);
+  const [manualDates, setManualDates] = useState<string[]>([]);
+  const [startTime, setStartTime] = useState("19:00");
+  const [endTime, setEndTime] = useState("20:00");
+  const [format, setFormat] = useState<FieldFormat>("quarter");
+  const [sector, setSector] = useState(SECTORS.quarter[0].id);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [team, setTeam] = useState("");
+  const [comment, setComment] = useState("");
+  const [preview, setPreview] = useState<Array<{ date: string; conflict?: BookingRequest }>>([]);
+  const [selectedDates, setSelectedDates] = useState<string[]>([]);
+  const [previewSignature, setPreviewSignature] = useState("");
   const [working, setWorking] = useState(false);
-  const [result, setResult] = useState("");
-  const [selectedBookingIds, setSelectedBookingIds] = useState<string[]>([]);
+  const [result, setResult] = useState<{
+    created: number;
+    conflicts: Array<{ date: string; client: string; time: string; duration: number }>;
+    error?: string;
+  } | null>(null);
 
-  const sourceBookings = useMemo(
-    () => bookings
-      .filter((item) => item.status !== "deleted" && item.status !== "cancelled")
-      .filter((item) => item.date >= sourceFrom && item.date <= sourceTo)
-      .sort(bookingSort),
-    [bookings, sourceFrom, sourceTo],
-  );
+  const duration = durationBetween(startTime, endTime);
+  const currentSignature = JSON.stringify({
+    mode,
+    periodKind,
+    periodMonth,
+    periodFrom,
+    periodTo,
+    weekdays,
+    manualDates,
+    startTime,
+    endTime,
+    format,
+    sector,
+    name,
+    phone,
+    team,
+    comment,
+  });
+  const previewIsCurrent = preview.length > 0 && previewSignature === currentSignature;
+  const previewConflicts = previewIsCurrent ? preview.filter((item) => item.conflict) : [];
+  const selectedCount = previewIsCurrent ? selectedDates.length : 0;
+  const priceHint = fieldOptions.find((item) => item.id === format)?.price || 0;
 
-  useEffect(() => {
-    const availableIds = new Set(sourceBookings.map((item) => item.id));
-    setSelectedBookingIds((current) => {
-      const kept = current.filter((id) => availableIds.has(id));
-      const next = [...kept];
-      sourceBookings.forEach((booking) => {
-        if (!next.includes(booking.id)) next.push(booking.id);
-      });
-      return next;
-    });
-  }, [sourceBookings]);
+  function changeFormat(nextFormat: FieldFormat) {
+    setFormat(nextFormat);
+    setSector(SECTORS[nextFormat][0].id);
+  }
 
-  const selectedSourceBookings = useMemo(
-    () => sourceBookings.filter((booking) => selectedBookingIds.includes(booking.id)),
-    [selectedBookingIds, sourceBookings],
-  );
+  function changeStartTime(nextTime: string) {
+    setStartTime(nextTime);
+    if (endTime <= nextTime) {
+      const index = TIME_SLOTS.indexOf(nextTime);
+      setEndTime(TIME_SLOTS[Math.min(index + 2, TIME_SLOTS.length - 1)]);
+    }
+  }
 
-  function toggleBookingSelection(bookingId: string) {
-    setSelectedBookingIds((current) =>
-      current.includes(bookingId)
-        ? current.filter((id) => id !== bookingId)
-        : [...current, bookingId],
+  function toggleWeekday(day: number) {
+    setWeekdays((current) =>
+      current.includes(day) ? current.filter((item) => item !== day) : [...current, day].sort(),
     );
   }
 
-  async function repeatSchedule(event: FormEvent) {
-    event.preventDefault();
-    if (sourceBookings.length === 0) {
-      setResult("В выбранном исходном периоде нет активных броней.");
+  function buildPreview() {
+    setResult(null);
+    if (duration < 60 || duration % 30 !== 0) {
+      setResult({ created: 0, conflicts: [], error: "Окончание должно быть минимум через час после начала." });
+      return;
+    }
+    if (name.trim().length < 2 || phone.replace(/\D/g, "").length < 10) {
+      setResult({ created: 0, conflicts: [], error: "Заполните имя клиента и корректный номер телефона." });
       return;
     }
 
-    if (selectedSourceBookings.length === 0) {
-      setResult("Выберите хотя бы одну бронь для повторения.");
-      return;
-    }
-
-    setWorking(true);
-    let created = 0;
-    const conflicts: string[] = [];
-    const shifts: number[] = [];
-    const baseShift = diffDays(sourceFrom, targetStart);
-
-    if (mode === "once") {
-      shifts.push(baseShift);
-    } else if (mode === "month") {
-      for (let index = 0; index < 4; index += 1) shifts.push(baseShift + index * 7);
-    } else {
-      for (let shift = baseShift; addDays(sourceTo, shift) <= untilDate; shift += 7) shifts.push(shift);
-    }
-
-    try {
-      for (const shift of shifts) {
-        for (const booking of selectedSourceBookings) {
-          const payload = {
-            date: addDays(booking.date, shift),
-            time: booking.time,
-            duration: booking.duration,
-            format: booking.format,
-            sector: booking.sector,
-            listPrice: booking.listPrice,
-            salePrice: booking.salePrice,
-            price: booking.price,
-            name: booking.name,
-            phone: booking.phone,
-            team: booking.team,
-            source: "Повтор расписания",
-            sourceDetail: `${booking.date} ${booking.time}`,
-            status: "new",
-            comment: `Повторено из ${booking.date} ${booking.time}`,
-          };
-
-          const response = await fetch("/api/bookings", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const result = await response.json();
-
-          if (!response.ok) {
-            conflicts.push(result.error || `${payload.date} ${payload.time}`);
-            continue;
-          }
-
-          created += 1;
-        }
+    let dates: string[] = [];
+    if (mode === "recurring") {
+      if (weekdays.length === 0) {
+        setResult({ created: 0, conflicts: [], error: "Выберите хотя бы один день недели." });
+        return;
       }
+      const from = periodKind === "month" ? `${periodMonth}-01` : periodFrom;
+      const to = periodKind === "month" ? lastDayOfMonth(periodMonth) : periodTo;
+      if (!from || !to || from > to) {
+        setResult({ created: 0, conflicts: [], error: "Проверьте начало и окончание периода." });
+        return;
+      }
+      dates = datesBetween(from, to).filter((date) => date >= today && weekdays.includes(isoWeekday(date)));
+    } else {
+      dates = [...manualDates].sort();
+    }
 
-      const message = `Создано ${created} броней, конфликтов ${conflicts.length}.`;
-      setResult(conflicts.length ? `${message} Конфликты: ${conflicts.slice(0, 5).join("; ")}` : message);
+    if (dates.length === 0) {
+      setResult({ created: 0, conflicts: [], error: "В выбранных условиях нет дат для создания." });
+      return;
+    }
+
+    const nextPreview = dates.map((date) => {
+      const conflict = findBookingConflict(bookings, {
+        id: `series-${date}`,
+        date,
+        time: startTime,
+        duration,
+        format,
+        sector,
+      });
+      return { date, conflict };
+    });
+    setPreview(nextPreview);
+    setSelectedDates(nextPreview.filter((item) => !item.conflict).map((item) => item.date));
+    setPreviewSignature(currentSignature);
+  }
+
+  function togglePreviewDate(date: string) {
+    setSelectedDates((current) =>
+      current.includes(date) ? current.filter((item) => item !== date) : [...current, date].sort(),
+    );
+  }
+
+  async function createSeries() {
+    if (!previewIsCurrent || selectedDates.length === 0 || duration < 60) return;
+    setWorking(true);
+    setResult(null);
+    try {
+      const response = await fetch("/api/bookings/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bookings: selectedDates.map((date) => ({
+            date,
+            time: startTime,
+            duration,
+            format,
+            sector,
+            name: name.trim(),
+            phone: phone.trim(),
+            team: team.trim(),
+            source: mode === "recurring" ? "Повторяющееся бронирование" : "Выбор отдельных дат",
+            sourceDetail: "Массовое создание администратором",
+            status: "confirmed",
+            comment: comment.trim(),
+          })),
+        }),
+      });
+      const data = await response.json() as {
+        created?: BookingRequest[];
+        conflicts?: Array<{ date: string; client: string; time: string; duration: number }>;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || "Не удалось создать бронирования");
+
+      const createdCount = data.created?.length || 0;
+      const serverConflicts = data.conflicts || [];
+      setResult({ created: createdCount, conflicts: serverConflicts });
+      setSelectedDates([]);
+      const message = `Создано ${createdCount} бронирований${serverConflicts.length ? `, пропущено конфликтов: ${serverConflicts.length}` : ""}.`;
       await onComplete(message);
+    } catch (error) {
+      setResult({ created: 0, conflicts: [], error: noticeText(error) });
     } finally {
       setWorking(false);
     }
@@ -1807,73 +1869,212 @@ function RepeatPlanner({
     <>
       <div className="admin-heading">
         <div>
-          <div className="section-kicker">Повторение</div>
-          <h1>Повторить расписание</h1>
-          <p>Администратор может копировать день, неделю, месяц или продлевать график до даты.</p>
+          <div className="section-kicker">Массовое создание</div>
+          <h1>Несколько бронирований за одно действие</h1>
+          <p>Соберите серию по дням недели или вручную отметьте даты. Конфликтные записи будут пропущены автоматически.</p>
         </div>
       </div>
-      <form className="admin-card repeat-card" onSubmit={(event) => void repeatSchedule(event)}>
-        <div className="editor-grid">
-          <label className="form-field">
-            <span>Исходная дата с</span>
-            <input type="date" value={sourceFrom} onChange={(event) => setSourceFrom(event.target.value)} />
-          </label>
-          <label className="form-field">
-            <span>Исходная дата по</span>
-            <input type="date" value={sourceTo} onChange={(event) => setSourceTo(event.target.value)} />
-          </label>
-          <label className="form-field repeat-mode-field">
-            <span>Сценарий</span>
-            <select className="repeat-mode-select" value={mode} onChange={(event) => setMode(event.target.value as "once" | "month" | "until")}>
-              <option value="once">Скопировать период один раз</option>
-              <option value="month">Повторить на месяц</option>
-              <option value="until">Продлить до даты</option>
-            </select>
-            <span aria-hidden="true" className="repeat-mode-caret" />
-          </label>
-          <label className="form-field">
-            <span>Начать с даты</span>
-            <input type="date" value={targetStart} onChange={(event) => setTargetStart(event.target.value)} />
-          </label>
-          {mode === "until" && (
-            <label className="form-field editor-span-2">
-              <span>Повторять до дата</span>
-              <input type="date" value={untilDate} onChange={(event) => setUntilDate(event.target.value)} />
-            </label>
-          )}
-        </div>
-        <div className="repeat-preview">
-          <strong>Исходных броней: {selectedSourceBookings.length} из {sourceBookings.length}</strong>
-          <small>Все брони отмечены по умолчанию. Снимите галочки у тех, которые не нужно повторять.</small>
-        </div>
-        {sourceBookings.length > 0 && (
-          <div className="repeat-source-list">
-            {sourceBookings.map((booking) => (
-              <div className={`repeat-source-row ${selectedBookingIds.includes(booking.id) ? "selected" : ""}`} key={booking.id}>
-                <label className="schedule-item-label">
-                  <input
-                    checked={selectedBookingIds.includes(booking.id)}
-                    onChange={() => toggleBookingSelection(booking.id)}
-                    type="checkbox"
-                  />
-                  <span className="checkbox-label"></span>
-                </label>
-                <span className="repeat-source-content">
-                  <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
-                  <span>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</span>
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        {result && <div className={`admin-booking-message ${result.includes("Создано") ? "success" : ""}`}>{result}</div>}
-        <div className="repeat-actions">
-          <button className="primary-button" disabled={working} type="submit">
-            <CopyPlus size={16} /> {working ? "Копируем..." : "Повторить расписание"}
+      <section className="admin-card repeat-builder">
+        <div className="repeat-mode-tabs" role="tablist" aria-label="Режим создания бронирований">
+          <button className={mode === "recurring" ? "active" : ""} onClick={() => setMode("recurring")} role="tab" type="button">
+            <RotateCcw size={17} />
+            <span><strong>Повторяющееся</strong><small>Период и дни недели</small></span>
+          </button>
+          <button className={mode === "dates" ? "active" : ""} onClick={() => setMode("dates")} role="tab" type="button">
+            <CalendarDays size={17} />
+            <span><strong>Отдельные даты</strong><small>Ручной выбор в календаре</small></span>
           </button>
         </div>
-      </form>
+
+        <div className="repeat-builder-grid">
+          <div className="repeat-setup">
+            <section className="repeat-step">
+              <div className="repeat-step-heading"><span>1</span><div><h2>Выберите даты</h2><p>{mode === "recurring" ? "Задайте период и нужные дни недели." : "Отметьте любые даты в календаре."}</p></div></div>
+              {mode === "recurring" ? (
+                <div className="repeat-period-panel">
+                  <div className="repeat-segmented">
+                    <button className={periodKind === "month" ? "active" : ""} onClick={() => setPeriodKind("month")} type="button">Весь месяц</button>
+                    <button className={periodKind === "range" ? "active" : ""} onClick={() => setPeriodKind("range")} type="button">Диапазон дат</button>
+                  </div>
+                  {periodKind === "month" ? (
+                    <label className="form-field">
+                      <span>Месяц</span>
+                      <input min={today.slice(0, 7)} type="month" value={periodMonth} onChange={(event) => setPeriodMonth(event.target.value)} />
+                    </label>
+                  ) : (
+                    <div className="repeat-date-range">
+                      <label className="form-field"><span>Начало</span><input min={today} type="date" value={periodFrom} onChange={(event) => setPeriodFrom(event.target.value)} /></label>
+                      <label className="form-field"><span>Окончание</span><input min={periodFrom || today} type="date" value={periodTo} onChange={(event) => setPeriodTo(event.target.value)} /></label>
+                    </div>
+                  )}
+                  <div className="repeat-weekdays" aria-label="Дни недели">
+                    {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((label, index) => {
+                      const day = index + 1;
+                      return <button aria-pressed={weekdays.includes(day)} className={weekdays.includes(day) ? "active" : ""} key={label} onClick={() => toggleWeekday(day)} type="button">{label}</button>;
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <RepeatMonthCalendar
+                  minDate={today}
+                  month={calendarMonth}
+                  onMonthChange={setCalendarMonth}
+                  onToggle={(date) => setManualDates((current) => current.includes(date) ? current.filter((item) => item !== date) : [...current, date].sort())}
+                  selectedDates={manualDates}
+                />
+              )}
+              {mode === "dates" && <div className="repeat-selected-note">Выбрано дат: <strong>{manualDates.length}</strong></div>}
+            </section>
+
+            <section className="repeat-step">
+              <div className="repeat-step-heading"><span>2</span><div><h2>Время и поле</h2><p>Параметры применятся ко всем выбранным датам.</p></div></div>
+              <div className="repeat-fields-grid">
+                <label className="form-field"><span>Начало</span><select value={startTime} onChange={(event) => changeStartTime(event.target.value)}>{TIME_SLOTS.slice(0, -2).map((time) => <option key={time}>{time}</option>)}</select></label>
+                <label className="form-field"><span>Окончание</span><select value={endTime} onChange={(event) => setEndTime(event.target.value)}>{TIME_SLOTS.filter((time) => time > startTime).map((time) => <option key={time}>{time}</option>)}</select></label>
+                <label className="form-field"><span>Формат</span><select value={format} onChange={(event) => changeFormat(event.target.value as FieldFormat)}>{fieldOptions.map((item) => <option key={item.id} value={item.id}>{item.shortLabel}</option>)}</select></label>
+                <label className="form-field"><span>Сектор</span><select value={sector} onChange={(event) => setSector(event.target.value)}>{SECTORS[format].map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+              </div>
+              <div className="repeat-price-hint">Стоимость рассчитается по текущему прайсу: {formatPrice(priceHint)} за час.</div>
+            </section>
+
+            <section className="repeat-step">
+              <div className="repeat-step-heading"><span>3</span><div><h2>Клиент</h2><p>Контактные данные для всей серии.</p></div></div>
+              <div className="repeat-fields-grid">
+                <label className="form-field"><span>Имя клиента</span><input maxLength={100} placeholder="Например, ФК Основа" value={name} onChange={(event) => setName(event.target.value)} /></label>
+                <label className="form-field"><span>Телефон</span><input maxLength={40} placeholder="+7 700 000 00 00" value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
+                <label className="form-field"><span>Команда</span><input maxLength={120} placeholder="Необязательно" value={team} onChange={(event) => setTeam(event.target.value)} /></label>
+                <label className="form-field"><span>Комментарий</span><input maxLength={1000} placeholder="Необязательно" value={comment} onChange={(event) => setComment(event.target.value)} /></label>
+              </div>
+            </section>
+
+            <div className="repeat-preview-action">
+              <button className="primary-button" disabled={working} onClick={buildPreview} type="button">
+                <Search size={17} /> Предпросмотр и проверка
+              </button>
+              <small>Ничего не будет создано до вашего подтверждения.</small>
+            </div>
+          </div>
+
+          <aside className="repeat-review">
+            <div className="repeat-review-head">
+              <div><span>Предпросмотр</span><h2>{previewIsCurrent ? `${preview.length} дат` : "Серия ещё не собрана"}</h2></div>
+              {previewIsCurrent && <strong>{selectedCount} выбрано</strong>}
+            </div>
+
+            {!previewIsCurrent && <div className="repeat-review-empty"><CalendarDays size={28} /><p>Заполните параметры слева и нажмите «Предпросмотр».</p></div>}
+
+            {previewIsCurrent && (
+              <>
+                <div className="repeat-review-summary">
+                  <span><Check size={15} /> Свободно: <strong>{preview.length - previewConflicts.length}</strong></span>
+                  <span className={previewConflicts.length ? "has-conflicts" : ""}>Конфликтов: <strong>{previewConflicts.length}</strong></span>
+                </div>
+                <div className="repeat-date-list">
+                  {preview.map((item) => (
+                    <label className={`repeat-date-row ${item.conflict ? "conflict" : ""}`} key={item.date}>
+                      <input checked={!item.conflict && selectedDates.includes(item.date)} disabled={Boolean(item.conflict) || working} onChange={() => togglePreviewDate(item.date)} type="checkbox" />
+                      <span className="checkbox-label" />
+                      <span className="repeat-date-main"><strong>{formatRepeatDate(item.date)}</strong><small>{startTime}–{endTime} · {formatLabel(format)} · {sector}</small></span>
+                      {item.conflict ? <span className="repeat-conflict-badge">Конфликт</span> : <span className="repeat-free-badge">Свободно</span>}
+                      {item.conflict && <span className="repeat-conflict-detail">{item.conflict.name} · {item.conflict.time}–{bookingEndTime(item.conflict.time, item.conflict.duration)}</span>}
+                    </label>
+                  ))}
+                </div>
+                <div className="repeat-create-bar">
+                  <div><span>Будет создано</span><strong>{selectedCount} бронирований</strong></div>
+                  <button className="primary-button" disabled={working || selectedCount === 0} onClick={() => void createSeries()} type="button">
+                    <CopyPlus size={17} /> {working ? "Создаём..." : "Создать выбранные"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {result?.error && <div className="admin-booking-message">{result.error}</div>}
+            {result && !result.error && (
+              <div className="repeat-result">
+                <strong>Создано: {result.created}</strong>
+                <span>Конфликтов пропущено: {result.conflicts.length}</span>
+                {result.conflicts.map((conflict) => (
+                  <small key={`${conflict.date}-${conflict.time}`}>{formatRepeatDate(conflict.date)} · {conflict.client} · {conflict.time}–{bookingEndTime(conflict.time, conflict.duration)}</small>
+                ))}
+              </div>
+            )}
+          </aside>
+        </div>
+      </section>
     </>
+  );
+}
+
+function lastDayOfMonth(month: string) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  return `${month}-${String(new Date(year, monthNumber, 0).getDate()).padStart(2, "0")}`;
+}
+
+function datesBetween(from: string, to: string) {
+  const dates: string[] = [];
+  for (let date = from; date <= to; date = addDays(date, 1)) dates.push(date);
+  return dates;
+}
+
+function isoWeekday(date: string) {
+  const day = new Date(`${date}T12:00:00`).getDay();
+  return day === 0 ? 7 : day;
+}
+
+function durationBetween(start: string, end: string) {
+  const [startHour, startMinute] = start.split(":").map(Number);
+  const [endHour, endMinute] = end.split(":").map(Number);
+  return endHour * 60 + endMinute - startHour * 60 - startMinute;
+}
+
+function formatRepeatDate(date: string) {
+  return new Intl.DateTimeFormat("ru-RU", { weekday: "short", day: "numeric", month: "long", year: "numeric" })
+    .format(new Date(`${date}T12:00:00`))
+    .replace(".", "");
+}
+
+function RepeatMonthCalendar({
+  month,
+  minDate,
+  selectedDates,
+  onMonthChange,
+  onToggle,
+}: {
+  month: string;
+  minDate: string;
+  selectedDates: string[];
+  onMonthChange: (month: string) => void;
+  onToggle: (date: string) => void;
+}) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const firstWeekday = isoWeekday(`${month}-01`);
+  const days = new Date(year, monthNumber, 0).getDate();
+  const cells = [...Array.from({ length: firstWeekday - 1 }, () => null), ...Array.from({ length: days }, (_, index) => index + 1)];
+
+  function moveMonth(direction: number) {
+    const next = new Date(year, monthNumber - 1 + direction, 1);
+    onMonthChange(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`);
+  }
+
+  return (
+    <div className="repeat-calendar">
+      <div className="repeat-calendar-toolbar">
+        <button aria-label="Предыдущий месяц" disabled={`${month}-01` <= `${minDate.slice(0, 7)}-01`} onClick={() => moveMonth(-1)} type="button"><ChevronLeft size={18} /></button>
+        <input aria-label="Месяц календаря" min={minDate.slice(0, 7)} onChange={(event) => onMonthChange(event.target.value)} type="month" value={month} />
+        <button aria-label="Следующий месяц" onClick={() => moveMonth(1)} type="button"><ChevronRight size={18} /></button>
+      </div>
+      <div className="repeat-calendar-weekdays">{["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((day) => <span key={day}>{day}</span>)}</div>
+      <div className="repeat-calendar-days">
+        {cells.map((day, index) => {
+          if (!day) return <span key={`empty-${index}`} />;
+          const date = `${month}-${String(day).padStart(2, "0")}`;
+          const selected = selectedDates.includes(date);
+          const disabled = date < minDate;
+          return <button aria-pressed={selected} className={selected ? "selected" : ""} disabled={disabled} key={date} onClick={() => onToggle(date)} type="button">{day}</button>;
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -2225,7 +2426,6 @@ function AnalyticsDashboard({
                 <input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} />
               </>
             )}
-            <span>{range.from} - {range.to}</span>
             <button className="analytics-export-btn" onClick={handleExport} type="button" title="Скачать Excel">
               <Download size={16} /> Скачать XLSX
             </button>

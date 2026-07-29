@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
   createRequestIfAvailable: vi.fn(),
+  createRequestsIfAvailable: vi.fn(),
   getRequests: vi.fn(),
   notifyAdminsAboutBooking: vi.fn(),
 }));
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/db")>()),
   createRequestIfAvailable: mocks.createRequestIfAvailable,
+  createRequestsIfAvailable: mocks.createRequestsIfAvailable,
   getRequests: mocks.getRequests,
 }));
 
@@ -21,6 +23,7 @@ import { createAuthToken, AUTH_COOKIE } from "@/lib/auth";
 import { clearRateLimits } from "@/lib/rate-limit";
 import { POST as login } from "@/app/api/auth/login/route";
 import { GET as listBookings, POST as createBooking } from "@/app/api/bookings/route";
+import { POST as createBookingSeries } from "@/app/api/bookings/bulk/route";
 import { PATCH as updateSettings } from "@/app/api/settings/route";
 
 const validBooking = {
@@ -51,6 +54,7 @@ describe("API authorization and validation", () => {
     clearRateLimits();
     mocks.getRequests.mockReset().mockResolvedValue([]);
     mocks.notifyAdminsAboutBooking.mockReset().mockResolvedValue(undefined);
+    mocks.createRequestsIfAvailable.mockReset().mockResolvedValue({ created: [], conflicts: [] });
     mocks.createRequestIfAvailable.mockReset().mockImplementation(async (input, initial) => ({
       ...input,
       ...initial,
@@ -119,5 +123,40 @@ describe("API authorization and validation", () => {
     expect(response.status).toBe(201);
     expect(mocks.createRequestIfAvailable.mock.calls[0][1]).toEqual({ status: "confirmed" });
     expect(mocks.createRequestIfAvailable.mock.calls[0][0].salePrice).toBe(9000);
+  });
+
+  it("creates a validated booking series in one admin request", async () => {
+    const token = createAuthToken("qa-admin");
+    mocks.createRequestsIfAvailable.mockResolvedValueOnce({
+      created: [{ ...validBooking, id: "REQ-SERIES-1" }],
+      conflicts: [],
+    });
+
+    const response = await createBookingSeries(jsonRequest(
+      "http://localhost/api/bookings/bulk",
+      {
+        bookings: [
+          { ...validBooking, date: "2099-08-04", status: "confirmed" },
+          { ...validBooking, date: "2099-08-11", status: "confirmed" },
+        ],
+      },
+      `${AUTH_COOKIE}=${token}`,
+    ));
+
+    expect(response.status).toBe(201);
+    expect(mocks.createRequestsIfAvailable).toHaveBeenCalledOnce();
+    expect(mocks.createRequestsIfAvailable.mock.calls[0][0]).toHaveLength(2);
+    expect(mocks.createRequestsIfAvailable.mock.calls[0][0][0]).toMatchObject({
+      input: { date: "2099-08-04", listPrice: 10000, salePrice: 10000 },
+      initial: { status: "confirmed" },
+    });
+  });
+
+  it("protects bulk booking creation", async () => {
+    const response = await createBookingSeries(jsonRequest("http://localhost/api/bookings/bulk", {
+      bookings: [validBooking],
+    }));
+    expect(response.status).toBe(401);
+    expect(mocks.createRequestsIfAvailable).not.toHaveBeenCalled();
   });
 });

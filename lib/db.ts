@@ -34,6 +34,16 @@ export class BookingConflictError extends Error {
   }
 }
 
+export type BulkBookingEntry = {
+  input: BookingInput;
+  initial?: Partial<InitialBookingState>;
+};
+
+export type BulkBookingConflict = {
+  candidate: BookingRequest;
+  conflict: BookingRequest;
+};
+
 // ── Cache helpers ────────────────────────────────────────────────────────────
 function getCachedBookings(): BookingRequest[] | null {
   const cache = globalThis.__airArenaBookingsCache;
@@ -366,6 +376,41 @@ export async function createRequestIfAvailable(
 
   upsertCachedBooking(request);
   return request;
+}
+
+export async function createRequestsIfAvailable(
+  entries: BulkBookingEntry[],
+): Promise<{ created: BookingRequest[]; conflicts: BulkBookingConflict[] }> {
+  const existing = await getRequests();
+  const created: BookingRequest[] = [];
+  const conflicts: BulkBookingConflict[] = [];
+
+  for (const entry of entries) {
+    const request = baseRequest(entry.input, entry.initial || {});
+    const conflict = findBookingConflict([...existing, ...created], request);
+    if (conflict) {
+      conflicts.push({ candidate: request, conflict });
+      continue;
+    }
+    created.push(request);
+  }
+
+  if (created.length === 0) return { created, conflicts };
+
+  if (!isSupabaseConfigured()) {
+    created.forEach(upsertCachedBooking);
+    return { created, conflicts };
+  }
+
+  const supabase = getSupabase()!;
+  const { error } = await supabase.from("bookings").insert(created.map(toDbRow));
+  if (error) {
+    console.error("Failed to create booking series", error);
+    throw new Error("Не удалось создать серию бронирований");
+  }
+
+  created.forEach(upsertCachedBooking);
+  return { created, conflicts };
 }
 
 export async function updateRequest(
