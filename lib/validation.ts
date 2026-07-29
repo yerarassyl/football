@@ -138,7 +138,7 @@ function validatePayments(value: unknown): PaymentRecord[] {
       id: cleanString(payment.id || `PAY-${index + 1}`, "ID оплаты", 100, true),
       amount: validPositiveMoney(payment.amount, "Сумма оплаты"),
       date: validDate(payment.date, "Дата оплаты"),
-      method: cleanString(payment.method, "Способ оплаты", 80, true),
+      method: cleanString(payment.method || "", "Способ оплаты", 80),
       recipient: cleanString(payment.recipient, "Получатель", 100, true),
     };
   });
