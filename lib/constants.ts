@@ -11,23 +11,23 @@ export type FieldOption = {
 export const FIELD_OPTIONS: FieldOption[] = [
   {
     id: "quarter",
-    label: "5×5",
-    shortLabel: "5×5",
-    description: "1/4 поля (50 × 32,5 м)",
+    label: "Четверть поля",
+    shortLabel: "1/4 поля",
+    description: "Для тренировки или игры 5 × 5",
     price: 10000,
   },
   {
     id: "half",
-    label: "8×8",
-    shortLabel: "8×8",
-    description: "1/2 поля (50 × 65 м)",
+    label: "Половина поля",
+    shortLabel: "1/2 поля",
+    description: "Для командной тренировки 7 × 7",
     price: 18000,
   },
   {
     id: "full",
-    label: "11×11",
-    shortLabel: "11×11",
-    description: "Полное поле (100 × 65 м)",
+    label: "Полное поле",
+    shortLabel: "Всё поле",
+    description: "Большой матч до 11 × 11",
     price: 30000,
   },
 ];
