@@ -745,7 +745,7 @@ export default function AdminDashboard() {
             <BarChart3 size={18} />
             <span className="nav-label" data-short="Аналит.">Аналитика</span>
           </button>
-          <button className={tab === "prices" ? "active" : ""} onClick={() => setTab("prices")}>
+          <button className={`desktop-only-nav${tab === "prices" ? " active" : ""}`} onClick={() => setTab("prices")}>
             <CircleDollarSign size={18} />
             <span className="nav-label" data-short="Прайс">Прайс</span>
           </button>

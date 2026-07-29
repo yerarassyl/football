@@ -3394,6 +3394,7 @@ a {
     display: flex;
   }
 
+  .admin-sidebar nav button.desktop-only-nav,
   .admin-sidebar nav button.desktop-queue-nav,
   .admin-sidebar nav button.desktop-trash-nav {
     display: none;
