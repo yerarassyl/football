@@ -30,7 +30,7 @@ import SerialPlanner from "./SerialPlanner";
 
 type QueueStatus = Exclude<RequestStatus, "deleted">;
 type QueueTab = `status:${QueueStatus}`;
-type Tab = "schedule" | QueueTab | "repeat" | "serial" | "trash" | "analytics" | "prices";
+type Tab = "schedule" | QueueTab | "repeat" | "trash" | "analytics" | "prices";
 
 type EditorState = {
   id?: string;
@@ -80,12 +80,6 @@ const paymentRecipients = [
   "ИП AIR ARENA",
   "Наличные",
 ];
-
-function addDays(date: string, days: number) {
-  const next = new Date(`${date}T00:00:00`);
-  next.setDate(next.getDate() + days);
-  return next.toISOString().slice(0, 10);
-}
 
 function diffDays(from: string, to: string) {
   const start = new Date(`${from}T00:00:00`).getTime();
@@ -767,10 +761,6 @@ export default function AdminDashboard() {
             <CopyPlus size={18} />
             <span className="nav-label" data-short="Повтор">Повтор</span>
           </button>
-          <button className={tab === "serial" ? "active" : ""} onClick={() => setTab("serial")}>
-            <CopyPlus size={18} />
-            <span className="nav-label" data-short="Серии">Серии</span>
-          </button>
           <button className={tab === "analytics" ? "active" : ""} onClick={() => setTab("analytics")}>
             <BarChart3 size={18} />
             <span className="nav-label" data-short="Аналит.">Аналитика</span>
@@ -925,16 +915,6 @@ export default function AdminDashboard() {
         )}
 
         {tab === "repeat" && (
-          <RepeatPlanner
-            bookings={bookings}
-            onComplete={async (message) => {
-              await load();
-              showNotice("success", message);
-            }}
-          />
-        )}
-
-        {tab === "serial" && (
           <SerialPlanner
             bookings={bookings}
             onComplete={async (message) => {
@@ -1587,201 +1567,6 @@ function BookingEditor({
         </section>
       )}
     </aside>
-  );
-}
-
-function RepeatPlanner({
-  bookings,
-  onComplete,
-}: {
-  bookings: BookingRequest[];
-  onComplete: (message: string) => Promise<void>;
-}) {
-  const today = arenaDateValue();
-  const [sourceFrom, setSourceFrom] = useState(today);
-  const [sourceTo, setSourceTo] = useState(today);
-  const [mode, setMode] = useState<"once" | "month" | "until">("once");
-  const [targetStart, setTargetStart] = useState(addDays(today, 7));
-  const [untilDate, setUntilDate] = useState(addDays(today, 28));
-  const [working, setWorking] = useState(false);
-  const [result, setResult] = useState("");
-  const [selectedBookingIds, setSelectedBookingIds] = useState<string[]>([]);
-
-  const sourceBookings = useMemo(
-    () => bookings
-      .filter((item) => item.status !== "deleted" && item.status !== "cancelled")
-      .filter((item) => item.date >= sourceFrom && item.date <= sourceTo)
-      .sort(bookingSort),
-    [bookings, sourceFrom, sourceTo],
-  );
-
-  useEffect(() => {
-    const availableIds = new Set(sourceBookings.map((item) => item.id));
-    setSelectedBookingIds((current) => {
-      const kept = current.filter((id) => availableIds.has(id));
-      const next = [...kept];
-      sourceBookings.forEach((booking) => {
-        if (!next.includes(booking.id)) next.push(booking.id);
-      });
-      return next;
-    });
-  }, [sourceBookings]);
-
-  const selectedSourceBookings = useMemo(
-    () => sourceBookings.filter((booking) => selectedBookingIds.includes(booking.id)),
-    [selectedBookingIds, sourceBookings],
-  );
-
-  function toggleBookingSelection(bookingId: string) {
-    setSelectedBookingIds((current) =>
-      current.includes(bookingId)
-        ? current.filter((id) => id !== bookingId)
-        : [...current, bookingId],
-    );
-  }
-
-  async function repeatSchedule(event: FormEvent) {
-    event.preventDefault();
-    if (sourceBookings.length === 0) {
-      setResult("В выбранном исходном периоде нет активных броней.");
-      return;
-    }
-
-    if (selectedSourceBookings.length === 0) {
-      setResult("Выберите хотя бы одну бронь для повторения.");
-      return;
-    }
-
-    setWorking(true);
-    let created = 0;
-    const conflicts: string[] = [];
-    const shifts: number[] = [];
-    const baseShift = diffDays(sourceFrom, targetStart);
-
-    if (mode === "once") {
-      shifts.push(baseShift);
-    } else if (mode === "month") {
-      for (let index = 0; index < 4; index += 1) shifts.push(baseShift + index * 7);
-    } else {
-      for (let shift = baseShift; addDays(sourceTo, shift) <= untilDate; shift += 7) shifts.push(shift);
-    }
-
-    try {
-      for (const shift of shifts) {
-        for (const booking of selectedSourceBookings) {
-          const payload = {
-            date: addDays(booking.date, shift),
-            time: booking.time,
-            duration: booking.duration,
-            format: booking.format,
-            sector: booking.sector,
-            listPrice: booking.listPrice,
-            salePrice: booking.salePrice,
-            price: booking.price,
-            name: booking.name,
-            phone: booking.phone,
-            team: booking.team,
-            source: "Повтор расписания",
-            sourceDetail: `${booking.date} ${booking.time}`,
-            status: "new",
-            comment: `Повторено из ${booking.date} ${booking.time}`,
-          };
-
-          const response = await fetch("/api/bookings", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const result = await response.json();
-
-          if (!response.ok) {
-            conflicts.push(result.error || `${payload.date} ${payload.time}`);
-            continue;
-          }
-
-          created += 1;
-        }
-      }
-
-      const message = `Создано ${created} броней, конфликтов ${conflicts.length}.`;
-      setResult(conflicts.length ? `${message} Конфликты: ${conflicts.slice(0, 5).join("; ")}` : message);
-      await onComplete(message);
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  return (
-    <>
-      <div className="admin-heading">
-        <div>
-          <div className="section-kicker">Повторение</div>
-          <h1>Повторить расписание</h1>
-          <p>Администратор может копировать день, неделю, месяц или продлевать график до даты.</p>
-        </div>
-      </div>
-      <form className="admin-card repeat-card" onSubmit={(event) => void repeatSchedule(event)}>
-        <div className="editor-grid">
-          <label className="form-field">
-            <span>Исходная дата с</span>
-            <input type="date" value={sourceFrom} onChange={(event) => setSourceFrom(event.target.value)} />
-          </label>
-          <label className="form-field">
-            <span>Исходная дата по</span>
-            <input type="date" value={sourceTo} onChange={(event) => setSourceTo(event.target.value)} />
-          </label>
-          <label className="form-field repeat-mode-field">
-            <span>Сценарий</span>
-            <select className="repeat-mode-select" value={mode} onChange={(event) => setMode(event.target.value as "once" | "month" | "until")}>
-              <option value="once">Скопировать период один раз</option>
-              <option value="month">Повторить на месяц</option>
-              <option value="until">Продлить до даты</option>
-            </select>
-            <span aria-hidden="true" className="repeat-mode-caret" />
-          </label>
-          <label className="form-field">
-            <span>Начать с даты</span>
-            <input type="date" value={targetStart} onChange={(event) => setTargetStart(event.target.value)} />
-          </label>
-          {mode === "until" && (
-            <label className="form-field editor-span-2">
-              <span>Повторять до дата</span>
-              <input type="date" value={untilDate} onChange={(event) => setUntilDate(event.target.value)} />
-            </label>
-          )}
-        </div>
-        <div className="repeat-preview">
-          <strong>Исходных броней: {selectedSourceBookings.length} из {sourceBookings.length}</strong>
-          <small>Все брони отмечены по умолчанию. Снимите галочки у тех, которые не нужно повторять.</small>
-        </div>
-        {sourceBookings.length > 0 && (
-          <div className="repeat-source-list">
-            {sourceBookings.map((booking) => (
-              <div className={`repeat-source-row ${selectedBookingIds.includes(booking.id) ? "selected" : ""}`} key={booking.id}>
-                <label className="schedule-item-label">
-                  <input
-                    checked={selectedBookingIds.includes(booking.id)}
-                    onChange={() => toggleBookingSelection(booking.id)}
-                    type="checkbox"
-                  />
-                  <span className="checkbox-label"></span>
-                </label>
-                <span className="repeat-source-content">
-                  <strong>{booking.date} · {booking.time}-{bookingEndTime(booking.time, booking.duration)}</strong>
-                  <span>{booking.name} · {formatLabel(booking.format)} · {booking.sector}</span>
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        {result && <div className={`admin-booking-message ${result.includes("Создано") ? "success" : ""}`}>{result}</div>}
-        <div className="repeat-actions">
-          <button className="primary-button" disabled={working} type="submit">
-            <CopyPlus size={16} /> {working ? "Копируем..." : "Повторить расписание"}
-          </button>
-        </div>
-      </form>
-    </>
   );
 }
 
