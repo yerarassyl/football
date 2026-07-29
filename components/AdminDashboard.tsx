@@ -567,7 +567,14 @@ export default function AdminDashboard() {
       );
 
       await Promise.all(updates);
-      await load(); // refresh data
+      const now = new Date().toISOString();
+      setBookings((current) =>
+        current.map((item) =>
+          selectedIds.includes(item.id)
+            ? { ...item, status: "confirmed" as const, confirmedAt: item.confirmedAt || now, updatedAt: now }
+            : item,
+        ),
+      );
       showNotice("success", `Подтверждено ${selectedIds.length} броней`);
       clearSelection();
     } catch (error) {
@@ -592,7 +599,14 @@ export default function AdminDashboard() {
       );
 
       await Promise.all(updates);
-      await load(); // refresh data
+      const now2 = new Date().toISOString();
+      setBookings((current) =>
+        current.map((item) =>
+          selectedIds.includes(item.id)
+            ? { ...item, status: "deleted" as const, deletedAt: now2, updatedAt: now2 }
+            : item,
+        ),
+      );
       showNotice("success", `Перемещено в корзину ${selectedIds.length} броней`);
       clearSelection();
     } catch (error) {
@@ -617,7 +631,14 @@ export default function AdminDashboard() {
       );
 
       await Promise.all(updates);
-      await load(); // refresh data
+      const now3 = new Date().toISOString();
+      setBookings((current) =>
+        current.map((item) =>
+          selectedIds.includes(item.id)
+            ? { ...item, status: "confirmed" as const, deletedAt: "", updatedAt: now3 }
+            : item,
+        ),
+      );
       showNotice("success", `Восстановлено ${selectedIds.length} броней`);
       clearSelection();
     } catch (error) {
