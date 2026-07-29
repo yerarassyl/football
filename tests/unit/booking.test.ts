@@ -4,6 +4,7 @@ import {
   findBookingConflict,
   occupiedQuarters,
   paymentStatusFor,
+  replacePaymentHistory,
   totalPaid,
 } from "@/lib/booking";
 import { BookingRequest } from "@/lib/types";
@@ -69,5 +70,23 @@ describe("booking business rules", () => {
     expect(paymentStatusFor(10000, 4000)).toBe("deposit");
     expect(enrichBooking(booking({ payments })).paymentStatus).toBe("paid");
     expect(enrichBooking(booking({ payments })).balance).toBe(0);
+  });
+
+  it("clears legacy payment totals when the payment history is deleted", () => {
+    const legacy = booking({
+      prepayment: 67000,
+      balance: 33000,
+      paymentStatus: "deposit",
+      paymentMethod: "Наличные",
+      paymentRecipient: "ТОО AIR ARENA",
+      paidAt: "2099-07-14",
+    });
+
+    const updated = replacePaymentHistory(legacy, []);
+
+    expect(updated.payments).toEqual([]);
+    expect(updated.prepayment).toBe(0);
+    expect(updated.balance).toBe(10000);
+    expect(updated.paymentStatus).toBe("unpaid");
   });
 });

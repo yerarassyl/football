@@ -1617,7 +1617,7 @@ function BookingEditor({
             <div className="inline-payment-grid">
               <label className="form-field">
                 <span>Сумма</span>
-                <input type="number" min="1" required value={inlinePaymentForm.amount} onChange={(e) => setInlinePaymentForm({ ...inlinePaymentForm, amount: e.target.value })} />
+                <input className="no-stepper" type="number" min="1" required value={inlinePaymentForm.amount} onChange={(e) => setInlinePaymentForm({ ...inlinePaymentForm, amount: e.target.value })} />
               </label>
               <label className="form-field">
                 <span>Дата</span>

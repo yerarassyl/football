@@ -2782,7 +2782,8 @@ a {
 
 .payment-history-row {
   display: grid;
-  grid-template-columns: 110px 110px minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: 110px 110px minmax(0, 1fr) minmax(0, 1fr) 32px;
+  align-items: center;
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -2807,7 +2808,7 @@ a {
   color: var(--ink-light);
   cursor: pointer;
   padding: 0;
-  margin-left: auto;
+  margin-left: 4px;
 }
 
 .payment-delete-btn:hover {

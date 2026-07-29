@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { conflictMessage, enrichBooking, findBookingConflict } from "./booking";
+import { conflictMessage, enrichBooking, findBookingConflict, replacePaymentHistory } from "./booking";
 import { mockRequests } from "./mock-data";
 import { getSupabase, isSupabaseConfigured } from "./supabase";
 import type { BookingInput, BookingRequest, PaymentRecord } from "./types";
@@ -94,7 +94,17 @@ type BookingRow = {
 };
 
 function fromDbRow(row: BookingRow): BookingRequest {
-  const payments = Array.isArray(row.payments) ? row.payments as PaymentRecord[] : [];
+  let payments: PaymentRecord[] = [];
+  if (Array.isArray(row.payments)) {
+    payments = row.payments as PaymentRecord[];
+  } else if (typeof row.payments === "string") {
+    try {
+      const parsed = JSON.parse(row.payments);
+      if (Array.isArray(parsed)) payments = parsed as PaymentRecord[];
+    } catch {
+      payments = [];
+    }
+  }
 
   return enrichBooking({
     id: row.id,
@@ -158,7 +168,7 @@ function toDbRow(request: BookingRequest): Record<string, unknown> {
     paid_at: enriched.paidAt,
     comment: enriched.comment,
     deleted_at: enriched.deletedAt,
-    payments: JSON.stringify(enriched.payments),
+    payments: enriched.payments,
   };
 }
 
@@ -367,7 +377,10 @@ export async function updateRequest(
     const index = requests.findIndex((item) => item.id === id);
     if (index === -1) return null;
     const lifecyclePatch = applyLifecyclePatch(requests[index], patch);
-    const updated = enrichBooking({ ...requests[index], ...lifecyclePatch, id });
+    const base = lifecyclePatch.payments !== undefined
+      ? replacePaymentHistory(requests[index], lifecyclePatch.payments)
+      : requests[index];
+    const updated = enrichBooking({ ...base, ...lifecyclePatch, id });
     upsertCachedBooking(updated);
     return updated;
   }
@@ -377,7 +390,10 @@ export async function updateRequest(
   if (!current) return null;
 
   const lifecyclePatch = applyLifecyclePatch(current, patch);
-  const updated = enrichBooking({ ...current, ...lifecyclePatch, id });
+  const base = lifecyclePatch.payments !== undefined
+    ? replacePaymentHistory(current, lifecyclePatch.payments)
+    : current;
+  const updated = enrichBooking({ ...base, ...lifecyclePatch, id });
   ensureNoConflict(requests, updated);
 
   const supabase = getSupabase()!;

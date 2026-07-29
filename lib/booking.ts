@@ -39,6 +39,18 @@ export function totalPaid(payments: PaymentRecord[]) {
   return payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
 }
 
+export function replacePaymentHistory(request: BookingRequest, payments: PaymentRecord[]) {
+  return enrichBooking({
+    ...request,
+    payments,
+    prepayment: 0,
+    balance: request.salePrice || request.price,
+    paymentMethod: "Не выбран",
+    paymentRecipient: "",
+    paidAt: "",
+  });
+}
+
 export function normalizePayments(
   payments: unknown,
   fallbackAmount = 0,
