@@ -838,9 +838,9 @@ export default function AdminDashboard() {
                           <div className="schedule-card-top">
                             <strong>{booking.name}</strong>
                             <span className="card-finance-trio">
-                              <span>Сумма {formatPrice(booking.salePrice || booking.price)}</span>
-                              <span>Оплачено {formatPrice(booking.prepayment)}</span>
-                              <span>Остаток {formatPrice(booking.balance)}</span>
+                              <span><em>Сумма</em>{formatPrice(booking.salePrice || booking.price)}</span>
+                              <span><em>Оплачено</em>{formatPrice(booking.prepayment)}</span>
+                              <span><em>Остаток</em>{formatPrice(booking.balance)}</span>
                             </span>
                           </div>
                           <div className="schedule-card-format">{formatLabel(booking.format)}</div>
@@ -985,9 +985,9 @@ export default function AdminDashboard() {
                           <div className="schedule-card-top">
                             <strong>{booking.name}</strong>
                             <span className="card-finance-trio">
-                              <span>Сумма {formatPrice(booking.salePrice || booking.price)}</span>
-                              <span>Оплачено {formatPrice(booking.prepayment)}</span>
-                              <span>Остаток {formatPrice(booking.balance)}</span>
+                              <span><em>Сумма</em>{formatPrice(booking.salePrice || booking.price)}</span>
+                              <span><em>Оплачено</em>{formatPrice(booking.prepayment)}</span>
+                              <span><em>Остаток</em>{formatPrice(booking.balance)}</span>
                             </span>
                           </div>
                           <div className="schedule-card-format">{formatLabel(booking.format)}</div>
