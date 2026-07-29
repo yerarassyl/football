@@ -504,6 +504,12 @@ a {
   gap: 12px;
 }
 
+.prices-save-row {
+  margin-top: 24px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .date-strip {
   display: grid;
   grid-template-columns: repeat(7, 1fr);

@@ -1164,9 +1164,6 @@ export default function AdminDashboard() {
                 <h1>Прайс</h1>
                 <p>Базовые цены для каждого формата поля.</p>
               </div>
-              <button className="primary-button" disabled={saving} onClick={savePriceSettings} type="button">
-                <Save size={16} /> Сохранить прайс
-              </button>
             </div>
             <section className="admin-card prices-tab-content">
               <div className="form-grid prices-grid">
@@ -1248,6 +1245,11 @@ export default function AdminDashboard() {
                     </label>
                   </div>
                 </div>
+              </div>
+              <div className="prices-save-row">
+                <button className="primary-button" disabled={saving} onClick={savePriceSettings} type="button">
+                  <Save size={16} /> Сохранить прайс
+                </button>
               </div>
             </section>
           </>
