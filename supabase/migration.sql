@@ -49,9 +49,11 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Promo prices are stored inside the `prices` JSONB as promo_quarter, promo_half, promo_full
+-- No separate column needed.
 -- Insert the default settings row if it doesn't exist
 INSERT INTO settings (id, prices)
-VALUES (1, '{"quarter":10000,"half":18000,"full":30000}'::jsonb)
+VALUES (1, '{"quarter":10000,"half":18000,"full":30000,"promo_quarter":0,"promo_half":0,"promo_full":0}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================

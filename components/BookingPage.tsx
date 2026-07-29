@@ -158,11 +158,12 @@ export default function BookingPage() {
   useEffect(() => {
     fetch("/api/settings", { cache: "no-store" })
       .then((response) => response.json())
-      .then((settings: { prices?: Record<FieldFormat, number> }) => {
+      .then((settings: { prices?: Record<FieldFormat, number>; promoPrices?: Record<FieldFormat, number> }) => {
         setFieldOptions((options) =>
           options.map((item) => ({
             ...item,
             price: settings.prices?.[item.id] ?? item.price,
+            promoPrice: settings.promoPrices?.[item.id] ?? item.promoPrice ?? 0,
           })),
         );
       })
@@ -392,7 +393,17 @@ export default function BookingPage() {
                         <span className="format-icon"><Trophy size={19} /></span>
                         <strong>{item.label}</strong>
                         <small>{item.description}</small>
-                        <span className="format-price">{formatPrice(item.price)} <em>/ час</em></span>
+                        {item.promoPrice > 0 ? (
+                          <span className="format-price format-price-promo">
+                            <del>{formatPrice(item.price)}</del>
+                            {" "}
+                            <span className="promo-price">{formatPrice(item.promoPrice)}</span>
+                            {" "}
+                            <em>/ час</em>
+                          </span>
+                        ) : (
+                          <span className="format-price">{formatPrice(item.price)} <em>/ час</em></span>
+                        )}
                       </button>
                     ))}
                   </div>

@@ -446,6 +446,64 @@ a {
   opacity: 0.68;
 }
 
+.format-price-promo del {
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.promo-price {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--green);
+}
+
+.format-card.selected .promo-price {
+  color: var(--lime);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.format-card.selected .format-price-promo del {
+  opacity: 0.5;
+}
+
+/* Hide number input steppers */
+.no-stepper {
+  -moz-appearance: textfield;
+}
+
+.no-stepper::-webkit-inner-spin-button,
+.no-stepper::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Promo prices in admin */
+.prices-format-block {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.prices-format-block:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.prices-format-block h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.prices-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
 .date-strip {
   display: grid;
   grid-template-columns: repeat(7, 1fr);

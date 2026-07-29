@@ -52,6 +52,14 @@ function validPositiveMoney(value: unknown, label: string) {
   return Math.round(result);
 }
 
+function validNonNegativeMoney(value: unknown, label: string) {
+  const result = Number(value);
+  if (!Number.isFinite(result) || result < 0 || result > MAX_PRICE) {
+    throw new ValidationError(`${label} указана неверно`);
+  }
+  return Math.round(result);
+}
+
 export function validateSalePrice(value: unknown) {
   return validPositiveMoney(value, "Фактическая стоимость");
 }
@@ -175,11 +183,19 @@ export function validateSettings(body: Record<string, unknown>) {
     throw new ValidationError("Не указаны цены");
   }
   const prices = body.prices as Record<string, unknown>;
+  const promos = (body.promoPrices && typeof body.promoPrices === "object" && !Array.isArray(body.promoPrices))
+    ? body.promoPrices as Record<string, unknown>
+    : {};
   return {
     prices: {
       quarter: validPositiveMoney(prices.quarter, "Цена четверти поля"),
       half: validPositiveMoney(prices.half, "Цена половины поля"),
       full: validPositiveMoney(prices.full, "Цена полного поля"),
+    },
+    promoPrices: {
+      quarter: validNonNegativeMoney(promos.quarter ?? 0, "Акционная цена четверти поля"),
+      half: validNonNegativeMoney(promos.half ?? 0, "Акционная цена половины поля"),
+      full: validNonNegativeMoney(promos.full ?? 0, "Акционная цена полного поля"),
     },
   };
 }

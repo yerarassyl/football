@@ -6,6 +6,7 @@ export type FieldOption = {
   shortLabel: string;
   description: string;
   price: number;
+  promoPrice: number;
 };
 
 export const FIELD_OPTIONS: FieldOption[] = [
@@ -15,6 +16,7 @@ export const FIELD_OPTIONS: FieldOption[] = [
     shortLabel: "1/4 поля",
     description: "1/4 поля (50 × 32,5 м)",
     price: 10000,
+    promoPrice: 0,
   },
   {
     id: "half",
@@ -22,6 +24,7 @@ export const FIELD_OPTIONS: FieldOption[] = [
     shortLabel: "1/2 поля",
     description: "1/2 поля (50 × 65 м)",
     price: 18000,
+    promoPrice: 0,
   },
   {
     id: "full",
@@ -29,6 +32,7 @@ export const FIELD_OPTIONS: FieldOption[] = [
     shortLabel: "Всё поле",
     description: "Полное поле (100 × 65 м)",
     price: 30000,
+    promoPrice: 0,
   },
 ];
 

@@ -193,7 +193,7 @@ export default function AdminDashboard() {
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [fieldOptions, setFieldOptions] = useState<FieldOption[]>(FIELD_OPTIONS);
   const [showPriceSettings, setShowPriceSettings] = useState(false);
-  const [priceForm, setPriceForm] = useState({ quarter: 0, half: 0, full: 0 });
+  const [priceForm, setPriceForm] = useState({ quarter: 0, half: 0, full: 0, quarterPromo: 0, halfPromo: 0, fullPromo: 0 });
   const [priceFormOpen, setPriceFormOpen] = useState(false);
 
   function openPriceSettings() {
@@ -201,6 +201,9 @@ export default function AdminDashboard() {
       quarter: fieldOptions.find((f) => f.id === "quarter")?.price || 10000,
       half: fieldOptions.find((f) => f.id === "half")?.price || 18000,
       full: fieldOptions.find((f) => f.id === "full")?.price || 30000,
+      quarterPromo: fieldOptions.find((f) => f.id === "quarter")?.promoPrice || 0,
+      halfPromo: fieldOptions.find((f) => f.id === "half")?.promoPrice || 0,
+      fullPromo: fieldOptions.find((f) => f.id === "full")?.promoPrice || 0,
     });
     setShowPriceSettings(true);
   }
@@ -211,7 +214,18 @@ export default function AdminDashboard() {
       const response = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prices: priceForm }),
+        body: JSON.stringify({
+          prices: {
+            quarter: priceForm.quarter,
+            half: priceForm.half,
+            full: priceForm.full,
+          },
+          promoPrices: {
+            quarter: priceForm.quarterPromo,
+            half: priceForm.halfPromo,
+            full: priceForm.fullPromo,
+          },
+        }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Не удалось сохранить цены");
@@ -219,6 +233,7 @@ export default function AdminDashboard() {
         items.map((item) => ({
           ...item,
           price: result.prices?.[item.id] ?? item.price,
+          promoPrice: result.promoPrices?.[item.id] ?? item.promoPrice ?? 0,
         })),
       );
       showNotice("success", "Прайс обновлен");
@@ -281,6 +296,9 @@ export default function AdminDashboard() {
         quarter: fieldOptions.find((f) => f.id === "quarter")?.price || 10000,
         half: fieldOptions.find((f) => f.id === "half")?.price || 18000,
         full: fieldOptions.find((f) => f.id === "full")?.price || 30000,
+        quarterPromo: fieldOptions.find((f) => f.id === "quarter")?.promoPrice || 0,
+        halfPromo: fieldOptions.find((f) => f.id === "half")?.promoPrice || 0,
+        fullPromo: fieldOptions.find((f) => f.id === "full")?.promoPrice || 0,
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -315,6 +333,7 @@ export default function AdminDashboard() {
         items.map((item) => ({
           ...item,
           price: settings.prices?.[item.id] ?? item.price,
+          promoPrice: settings.promoPrices?.[item.id] ?? item.promoPrice ?? 0,
         })),
       );
     } catch (error) {
@@ -1151,33 +1170,84 @@ export default function AdminDashboard() {
             </div>
             <section className="admin-card prices-tab-content">
               <div className="form-grid prices-grid">
-                <label className="form-field">
-                  <span>Четверть поля (1/4)</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={priceForm.quarter}
-                    onChange={(e) => setPriceForm({ ...priceForm, quarter: Number(e.target.value) || 0 })}
-                  />
-                </label>
-                <label className="form-field">
-                  <span>Половина поля (1/2)</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={priceForm.half}
-                    onChange={(e) => setPriceForm({ ...priceForm, half: Number(e.target.value) || 0 })}
-                  />
-                </label>
-                <label className="form-field">
-                  <span>Полное поле</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={priceForm.full}
-                    onChange={(e) => setPriceForm({ ...priceForm, full: Number(e.target.value) || 0 })}
-                  />
-                </label>
+                <div className="prices-format-block">
+                  <h3>Четверть поля (1/4)</h3>
+                  <div className="prices-row">
+                    <label className="form-field">
+                      <span>Цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        value={priceForm.quarter || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, quarter: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                    <label className="form-field">
+                      <span>Акционная цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        placeholder="0"
+                        value={priceForm.quarterPromo || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, quarterPromo: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                  </div>
+                </div>
+                <div className="prices-format-block">
+                  <h3>Половина поля (1/2)</h3>
+                  <div className="prices-row">
+                    <label className="form-field">
+                      <span>Цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        value={priceForm.half || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, half: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                    <label className="form-field">
+                      <span>Акционная цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        placeholder="0"
+                        value={priceForm.halfPromo || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, halfPromo: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                  </div>
+                </div>
+                <div className="prices-format-block">
+                  <h3>Полное поле</h3>
+                  <div className="prices-row">
+                    <label className="form-field">
+                      <span>Цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        value={priceForm.full || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, full: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                    <label className="form-field">
+                      <span>Акционная цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        placeholder="0"
+                        value={priceForm.fullPromo || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, fullPromo: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                  </div>
+                </div>
               </div>
             </section>
           </>
@@ -1190,33 +1260,84 @@ export default function AdminDashboard() {
                 <button className="modal-close" onClick={() => setShowPriceSettings(false)} type="button"><X size={18} /></button>
               </div>
               <div className="modal-body">
-                <label className="form-field">
-                  <span>Четверть поля (1/4)</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={priceForm.quarter}
-                    onChange={(e) => setPriceForm({ ...priceForm, quarter: Number(e.target.value) || 0 })}
-                  />
-                </label>
-                <label className="form-field">
-                  <span>Половина поля (1/2)</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={priceForm.half}
-                    onChange={(e) => setPriceForm({ ...priceForm, half: Number(e.target.value) || 0 })}
-                  />
-                </label>
-                <label className="form-field">
-                  <span>Полное поле</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={priceForm.full}
-                    onChange={(e) => setPriceForm({ ...priceForm, full: Number(e.target.value) || 0 })}
-                  />
-                </label>
+                <div className="prices-format-block">
+                  <h3>Четверть поля (1/4)</h3>
+                  <div className="prices-row">
+                    <label className="form-field">
+                      <span>Цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        value={priceForm.quarter || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, quarter: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                    <label className="form-field">
+                      <span>Акционная цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        placeholder="0"
+                        value={priceForm.quarterPromo || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, quarterPromo: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                  </div>
+                </div>
+                <div className="prices-format-block">
+                  <h3>Половина поля (1/2)</h3>
+                  <div className="prices-row">
+                    <label className="form-field">
+                      <span>Цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        value={priceForm.half || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, half: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                    <label className="form-field">
+                      <span>Акционная цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        placeholder="0"
+                        value={priceForm.halfPromo || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, halfPromo: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                  </div>
+                </div>
+                <div className="prices-format-block">
+                  <h3>Полное поле</h3>
+                  <div className="prices-row">
+                    <label className="form-field">
+                      <span>Цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        value={priceForm.full || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, full: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                    <label className="form-field">
+                      <span>Акционная цена</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="no-stepper"
+                        placeholder="0"
+                        value={priceForm.fullPromo || ""}
+                        onChange={(e) => setPriceForm({ ...priceForm, fullPromo: Number(e.target.value.replace(/\D/g, "").slice(0, 7)) || 0 })}
+                      />
+                    </label>
+                  </div>
+                </div>
               </div>
               <div className="modal-actions">
                 <button className="secondary-button" onClick={() => setShowPriceSettings(false)} type="button">Отмена</button>
